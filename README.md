@@ -407,7 +407,7 @@ This repository uses four git submodules:
 | `ArbiScannerWebApp`              | https://github.com/dimasdom/ArbiScannerWebApp               |
 | `ArbiScannerAdminPannel`         | https://github.com/dimasdom/ArbiScannerAdminPannel          |
 | `ArbiScanner.TelegramNotifierApp`| https://github.com/dimasdom/ArbiScanner.TelegramNotifierApp |
-| `ArbitrageScanner`               | https://github.com/dimasdom/ArbitrageScanner                |
+| `ArbitrageScanner`               | https://github.com/dimasdom/ArbitrageSpreadScanner                |
 
 ### Common submodule commands
 
