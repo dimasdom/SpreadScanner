@@ -1,15 +1,12 @@
-[submodule "ArbiSpreadScanner.WebApp"]
+[submodule "ArbitrageScanner"]
 	path = ArbitrageScanner
 	url = https://github.com/dimasdom/ArbiSpreadScanner.WebApp.git
-
-[submodule "ArbitrageSpreadScanner"]
+[submodule "ArbiScannerWebApp"]
 	path = ArbiScannerWebApp
 	url = https://github.com/dimasdom/ArbitrageSpreadScanner.git
-
-[submodule "ArbiSpreadScanner.AdminPannel"]
+[submodule "ArbiScannerAdminPannel"]
 	path = ArbiScannerAdminPannel
 	url = https://github.com/dimasdom/ArbiSpreadScanner.AdminPannel.git
-
-[submodule "ArbiSpreadScanner.TelegramNotifierApp"]
+[submodule "ArbiScanner.TelegramNotifierApp"]
 	path = ArbiScanner.TelegramNotifierApp
 	url = https://github.com/dimasdom/ArbiSpreadScanner.TelegramNotifierApp.git
