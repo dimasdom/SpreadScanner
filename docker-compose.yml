@@ -1,0 +1,323 @@
+# Combined docker-compose for all ArbiScanner projects.
+# Run from the ArbiScanner/ root directory:
+#   docker compose up --build
+#
+# Required environment variables (set in a root .env file or shell):
+#   TELEGRAM_BOT_TOKEN          - Telegram bot token for the notifier worker
+#   MONGO_DB_CONNECTION_STRING  - MongoDB connection string for ArbitrageScanner
+#                                 (defaults to the local mongodb service below)
+#
+# Port map:
+#   5432  - PostgreSQL
+#   5672  - RabbitMQ AMQP  | 15672 - RabbitMQ management UI
+#   6379  - Redis
+#   27017 - MongoDB
+#   3000  - Grafana
+#   3001  - ArbiScannerWebApp React client
+#   3002  - ArbiScannerAdminPannel React client
+#   3100  - Loki
+#   8080  - ArbiScannerWebApp .NET API
+#   8081  - ArbiScannerAdminPannel .NET API
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres
+    container_name: arbiscanner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: su1234
+      POSTGRES_DB: ArbiScannerBot
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - arbiscanner
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: arbiscanner-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - arbiscanner
+
+  redis:
+    image: redis
+    container_name: arbiscanner-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - arbiscanner
+
+  mongodb:
+    image: mongo
+    container_name: arbiscanner-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGODB_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD}"
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - arbiscanner
+
+  # ── Monitoring ────────────────────────────────────────────────────────────────
+
+  loki:
+    image: grafana/loki
+    container_name: arbiscanner-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - arbiscanner
+
+  grafana:
+    image: grafana/grafana
+    container_name: arbiscanner-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./ArbiScannerWebApp/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - loki
+    networks:
+      - arbiscanner
+
+  # ── ArbiScannerWebApp ─────────────────────────────────────────────────────────
+
+  web:
+    build:
+      context: .
+      dockerfile: ArbiScannerWebApp/Dockerfile
+    image: arbiscanner-web:latest
+    container_name: arbiscanner-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__SqlServer: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Queue: spread_api
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      RabbitMq__Exchange: spread_fanout_exchange
+      RabbitMq__RoutingKey: ""
+      Redis__Endpoint: redis:6379
+      Cors__AllowedOrigins__0: "${WEB_CLIENT_URL}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      MongoDb__ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin"
+      MongoDb__DatabaseName: "${MONGODB_DATABASE_NAME}"
+      MongoDb__CurrentSpreadsCollection: "${MONGODB_CURRENT_SPREADS_COLLECTION}"
+      MongoDb__SpreadsTickerCollection: "${MONGODB_SPREADS_TICKER_COLLECTION}"
+      AdminApiUrl: http://admin-api:8080
+      ClientUrl: "${WEB_CLIENT_URL}"
+      AdminUser__UserName: "${ADMIN_USERNAME}"
+      AdminUser__Password: "${ADMIN_PASSWORD}"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY_WEBAPP}"
+      Jwt__Issuer: "${JWT_ISSUER_WEBAPP}"
+      Jwt__Audience: "${JWT_AUDIENCE_WEBAPP}"
+      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
+      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      EmailSettings__SmtpServer: "${SMTP_SERVER}"
+      EmailSettings__SmtpPort: "${SMTP_PORT}"
+      EmailSettings__SenderEmail: "${SENDER_EMAIL}"
+      EmailSettings__SenderPassword: "${SENDER_PASSWORD}"
+      EmailSettings__SenderName: "${SENDER_NAME}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  web-client:
+    build:
+      context: ArbiScannerWebApp
+      dockerfile: Dockerfile.client
+      args:
+        VITE_API_URL: ""
+    image: arbiscanner-web-client:latest
+    container_name: arbiscanner-web-client
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - web
+    networks:
+      - arbiscanner
+
+  # ── ArbiScannerAdminPannel ────────────────────────────────────────────────────
+
+  admin-api:
+    build:
+      context: .
+      dockerfile: ArbiScannerAdminPannel/Dockerfile
+    image: arbiscanner-admin-api:latest
+    container_name: arbiscanner-admin-api
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
+      ConnectionStrings__AdminConnection: "Host=postgres;Port=5432;Database=ArbiScannerAdminPanelDb;Username=postgres;Password=su1234"
+      Redis__Endpoint: redis:6379
+      Cors__AllowedOrigins: "${ADMIN_CLIENT_URL}"
+      Seed__Enabled: "${SEED_ENABLED}"
+      Seed__AdminUserName: "${ADMIN_USERNAME}"
+      Seed__AdminPassword: "${ADMIN_PASSWORD}"
+      Seed__ManagerUserName: "${MANAGER_USERNAME}"
+      Seed__ManagerPassword: "${MANAGER_PASSWORD}"
+      Jwt__SigningKey: "${JWT_SIGNING_KEY_ADMINPANEL}"
+      Jwt__Issuer: "${JWT_ISSUER_ADMINPANEL}"
+      Jwt__Audience: "${JWT_AUDIENCE_ADMINPANEL}"
+      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
+      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      OxaPay__BaseUrl: "${OXAPAY_BASE_URL}"
+      OxaPay__MerchantApiKey: "${OXAPAY_MERCHANT_API_KEY}"
+      OxaPay__DefaultCurrency: "${OXAPAY_DEFAULT_CURRENCY}"
+      OxaPay__DefaultLifetime: "${OXAPAY_DEFAULT_LIFETIME}"
+      OxaPay__Sandbox: "${OXAPAY_SANDBOX}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      loki:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  admin-client:
+    build:
+      context: ArbiScannerAdminPannel
+      dockerfile: Dockerfile.client
+      args:
+        VITE_API_URL: "${ADMIN_API_URL}"
+    image: arbiscanner-admin-client:latest
+    container_name: arbiscanner-admin-client
+    restart: unless-stopped
+    ports:
+      - "3002:80"
+    depends_on:
+      - admin-api
+    networks:
+      - arbiscanner
+
+  # ── TelegramNotifierApp ───────────────────────────────────────────────────────
+
+  telegram-notifier:
+    build:
+      context: .
+      dockerfile: ArbiScanner.TelegramNotifierApp/Dockerfile
+    image: arbiscanner-telegram-notifier:latest
+    container_name: arbiscanner-telegram-notifier
+    restart: unless-stopped
+    environment:
+      ConnectionStrings__PostgreSqlConnection: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
+      RabbitMq__Host: rabbitmq
+      RabbitMq__Queue: spread_telegram
+      RabbitMq__Username: guest
+      RabbitMq__Password: guest
+      RabbitMq__Exchange: spread_fanout_exchange
+      RabbitMq__RoutingKey: ""
+      Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  # ── ArbitrageScanner ──────────────────────────────────────────────────────────
+
+  arbitrage-scanner:
+    build:
+      context: ArbitrageScanner
+      dockerfile: ArbitrageScanner.Worker/Dockerfile
+    image: arbitrage-scanner:latest
+    container_name: arbiscanner-arbitrage-scanner
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", "timeout 14400 dotnet ArbitrageScanner.Worker.dll; exit 0"]
+    environment:
+      MongoDb_ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/ArbitrageScanner?authSource=admin"
+      RABBITMQ_HOST: rabbitmq
+      Arbitrage__SpreadSize: "${ARBITRAGE_SPREAD_SIZE}"
+      Arbitrage__PositionSize: "${ARBITRAGE_POSITION_SIZE}"
+      Arbitrage__KeepWatchingSpread: "${ARBITRAGE_KEEP_WATCHING_SPREAD}"
+      Arbitrage__ThreadCount: "${ARBITRAGE_THREAD_COUNT}"
+      Arbitrage__FundingThresholdRatio: "${ARBITRAGE_FUNDING_THRESHOLD_RATIO}"
+      Arbitrage__TelegramToken: "${TELEGRAM_BOT_TOKEN}"
+      Arbitrage__ChatId: "${ARBITRAGE_CHAT_ID}"
+      Arbitrage__Futures: "${ARBITRAGE_FUTURES}"
+      Arbitrage__Funding: "${ARBITRAGE_FUNDING}"
+      Arbitrage__Spot: "${ARBITRAGE_SPOT}"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+  mongodb-data:
+  loki-data:
+  grafana-data:
+
+networks:
+  arbiscanner:
+    driver: bridge

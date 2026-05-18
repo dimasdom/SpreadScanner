@@ -1,0 +1,32 @@
+<Solution>
+  <Folder Name="/ArbiScannerWebApp/">
+    <Project Path="ArbiScannerWebApp/ArbiScannerWeb.Abstractions/ArbiScannerWeb.Abstractions.csproj" />
+    <Project Path="ArbiScannerWebApp/ArbiScannerWeb.Domain/ArbiScannerWeb.Domain.csproj" />
+    <Project Path="ArbiScannerWebApp/ArbiScannerWeb.Infrastructure/ArbiScannerWeb.Infrastructure.csproj" />
+    <Project Path="ArbiScannerWebApp/ArbiScannerWeb.API/ArbiScannerWeb.API.csproj" />
+    <Project Path="ArbiScannerWebApp/ArbiScannerWeb.Client/ArbiScannerWeb.Client.esproj" />
+  </Folder>
+  <Folder Name="/ArbiScannerAdminPannel/">
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.Domain/ArbiScannerAdminPanel.Domain.csproj" />
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.Abstractions/ArbiScannerAdminPanel.Abstractions.csproj" />
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.Application/ArbiScannerAdminPanel.Application.csproj" />
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.Infrastructure/ArbiScannerAdminPanel.Infrastructure.csproj" />
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.API/ArbiScannerAdminPanel.API.csproj" />
+    <Project Path="ArbiScannerAdminPannel/ArbiScannerAdminPanel.Client/ArbiScannerAdminPanel.Client.esproj" />
+  </Folder>
+  <Folder Name="/TelegramNotifierApp/">
+    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Domain/ArbiScanner.TelegramNotifierApp.Domain.csproj" />
+    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Abstractions/ArbiScanner.TelegramNotifierApp.Abstractions.csproj" />
+    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Application/ArbiScanner.TelegramNotifierApp.Application.csproj" />
+    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Infrastructure/ArbiScanner.TelegramNotifierApp.Infrastructure.csproj" />
+    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Worker/ArbiScanner.TelegramNotifierApp.Worker.csproj" />
+  </Folder>
+  <Folder Name="/ArbitrageScanner/">
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Domain/ArbitrageScanner.Domain.csproj" />
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Infrastructure/ArbitrageScanner.Infrastructure.csproj" />
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Futures/ArbitrageScanner.Futures.csproj" />
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Funding/ArbitrageScanner.Funding.csproj" />
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Spot/ArbitrageScanner.Spot.csproj" />
+    <Project Path="ArbitrageScanner/ArbitrageScanner.Worker/ArbitrageScanner.Worker.csproj" />
+  </Folder>
+</Solution>
