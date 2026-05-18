@@ -1,9 +1,9 @@
 [submodule "ArbitrageScanner"]
 	path = ArbitrageScanner
-	url = https://github.com/dimasdom/ArbiSpreadScanner.WebApp.git
+	url = https://github.com/dimasdom/ArbitrageSpreadScanner.git
 [submodule "ArbiScannerWebApp"]
 	path = ArbiScannerWebApp
-	url = https://github.com/dimasdom/ArbitrageSpreadScanner.git
+	url = https://github.com/dimasdom/ArbiSpreadScanner.WebApp.git
 [submodule "ArbiScannerAdminPannel"]
 	path = ArbiScannerAdminPannel
 	url = https://github.com/dimasdom/ArbiSpreadScanner.AdminPannel.git
