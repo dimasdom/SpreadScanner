@@ -19,56 +19,78 @@ A cryptocurrency arbitrage scanning platform that monitors 12+ exchanges for fut
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         ArbitrageScanner                            │
-│  (.NET 9 Worker — scans Binance, Bybit, MEXC, OKX, HTX, CoinEX,   │
-│   KuCoin Futures, BingX, Gate.io, XT, LBank, WhiteBit via CCXT)    │
-│                                                                     │
-│   Futures scanner  |  Funding scanner  |  Spot scanner             │
-└────────────┬────────────────────────────────────┬───────────────────┘
-             │ publishes spread events             │ stores tickers
-             v                                     v
-     ┌───────────────┐                   ┌──────────────────┐
-     │   RabbitMQ    │                   │     MongoDB      │
-     │ (fanout exch) │                   │  (ticker store)  │
-     └───┬───────────┘                   └──────────────────┘
-         │                                         ^
-         │  spread_api queue    spread_telegram     │ reads current spreads
-         ├─────────────────┐    queue               │
-         v                 │         │              │
-┌─────────────────┐        │    ┌────v─────────────────────────┐
-│ ArbiScannerWeb  │        │    │ ArbiScanner.TelegramNotifier │
-│ App API         │        │    │ (.NET 10 Worker)             │
-│ (.NET 10 API)   │        │    │                              │
-│                 │        └───>│ Sends alerts to Telegram     │
-│ PostgreSQL ─────┤             │ users via Telegram.Bot SDK   │
-│ Redis       ────┤             │                              │
-│ MongoDB     ────┤             │ PostgreSQL (user link state) │
-│ SignalR     ────┤             └──────────────────────────────┘
-└────────┬────────┘
-         │ serves
-         v
-┌─────────────────────┐       ┌──────────────────────────────┐
-│  ArbiScannerWebApp  │       │  ArbiScannerAdminPannel API  │
-│  React/Vite SPA     │       │  (.NET 10 API)               │
-│  (nginx, port 80)   │       │                              │
-│                     │       │  PostgreSQL (shared + admin) │
-│  Real-time spread   │       │  Redis, OxaPay integration   │
-│  dashboard via      │       └────────────┬─────────────────┘
-│  SignalR            │                    │ serves
-└─────────────────────┘                    v
-                               ┌────────────────────────────┐
-                               │ ArbiScannerAdminPannel     │
-                               │ React/Vite SPA             │
-                               │ (nginx, port 3002)         │
-                               │                            │
-                               │ User, subscription, and    │
-                               │ payment management         │
-                               └────────────────────────────┘
+```mermaid
+graph TB
+    subgraph ext ["External"]
+        EXCHANGES["12+ Crypto Exchanges\n(Binance · OKX · Bybit · …)"]
+        TELEGRAM_API["Telegram API"]
+        OXAPAY["OxaPay\nPayments"]
+    end
 
-Monitoring:  Loki (log aggregation) <── all services
-             Grafana (dashboards, port 3000)
+    subgraph scanner ["ArbitrageScanner  ·  .NET 9 Worker"]
+        PROXY["Proxy Pool\n(rotating)"]
+        STRATS["Futures / Funding Rate / Spot-Futures\nStrategies  (ccxt · parallel workers)"]
+        PUBLISHER["Protobuf Publisher"]
+    end
+
+    subgraph broker ["Message Broker"]
+        FANOUT[["RabbitMQ\nFanout Exchange\nspread_fanout_exchange"]]
+    end
+
+    subgraph webapp ["ArbiScannerWebApp  ·  .NET 10"]
+        WEB_CONSUMER["RabbitMQ Consumer\n(queue: spread_api)"]
+        WEB_API["ASP.NET Core 10 API\nJWT · REST · SignalR"]
+        WEB_HUB["SignalR Hub"]
+    end
+
+    subgraph adminpanel ["ArbiScannerAdminPanel  ·  .NET 10"]
+        ADMIN_API["ASP.NET Core 10 API\nRole-based Auth · OxaPay"]
+    end
+
+    subgraph notifier ["TelegramNotifier  ·  .NET 10 Worker"]
+        TG_CONSUMER["RabbitMQ Consumer\n(queue: spread_telegram)"]
+        TG_BOT["Telegram Bot\n(account linking · opt-in/out)"]
+    end
+
+    subgraph stores ["Data Stores"]
+        AS_MONGO[("MongoDB\nArbitrageScanner\n— found spreads only —")]
+        WEB_MONGO[("MongoDB\nWebApp\n— spreads + tickers —")]
+        PG_SHARED[("PostgreSQL  ①\nShared DB\nuser data · client settings")]
+        PG_ADMIN[("PostgreSQL  ②\nAdmin DB\nsubscriptions · payments")]
+        REDIS[("Redis\ncache")]
+    end
+
+    subgraph clients ["Clients"]
+        WEB_CLIENT["WebApp React SPA\nRedux Toolkit · SignalR Client"]
+        ADMIN_CLIENT["AdminPanel React SPA\nRedux Toolkit"]
+    end
+
+    EXCHANGES -->|market data| PROXY
+    PROXY -->|proxied HTTP| STRATS
+    STRATS -->|spread events protobuf| PUBLISHER
+    STRATS -->|persist found spreads| AS_MONGO
+    PUBLISHER -->|publish| FANOUT
+
+    FANOUT -->|spread events| WEB_CONSUMER
+    FANOUT -->|spread events| TG_CONSUMER
+
+    WEB_CONSUMER --> WEB_API
+    WEB_API --> WEB_HUB
+    WEB_HUB -->|real-time push| WEB_CLIENT
+    WEB_CLIENT -->|REST| WEB_API
+    WEB_API -->|spreads + tickers| WEB_MONGO
+    WEB_API -->|user data| PG_SHARED
+    WEB_API --> REDIS
+    WEB_API -->|HTTP — subscription info| ADMIN_API
+
+    TG_CONSUMER --> TG_BOT
+    TG_BOT -->|read user-telegram links| PG_SHARED
+    TG_BOT --> TELEGRAM_API
+
+    ADMIN_API -->|client settings| PG_SHARED
+    ADMIN_API -->|subscriptions + payments| PG_ADMIN
+    ADMIN_API --> OXAPAY
+    ADMIN_CLIENT -->|REST| ADMIN_API
 ```
 
 ---
