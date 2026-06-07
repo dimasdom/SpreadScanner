@@ -16,7 +16,6 @@
   </Folder>
   <Folder Name="/TelegramNotifierApp/">
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Domain/ArbiScanner.TelegramNotifierApp.Domain.csproj" />
-    <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Abstractions/ArbiScanner.TelegramNotifierApp.Abstractions.csproj" />
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Application/ArbiScanner.TelegramNotifierApp.Application.csproj" />
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Infrastructure/ArbiScanner.TelegramNotifierApp.Infrastructure.csproj" />
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Worker/ArbiScanner.TelegramNotifierApp.Worker.csproj" />

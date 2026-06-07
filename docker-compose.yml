@@ -16,8 +16,13 @@
 #   3001  - ArbiScannerWebApp React client
 #   3002  - ArbiScannerAdminPannel React client
 #   3100  - Loki
+#   3200  - Grafana Tempo query API
+#   4317  - Grafana Tempo OTLP gRPC
+#   4318  - Grafana Tempo OTLP HTTP
 #   8080  - ArbiScannerWebApp .NET API
 #   8081  - ArbiScannerAdminPannel .NET API
+#   8085  - Worker metrics (Prometheus scrape)
+#   9090  - Prometheus
 
 services:
 
@@ -100,6 +105,37 @@ services:
     networks:
       - arbiscanner
 
+  tempo:
+    image: grafana/tempo:latest
+    container_name: arbiscanner-tempo
+    restart: unless-stopped
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    command: -config.file=/etc/tempo/tempo.yaml
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks:
+      - arbiscanner
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: arbiscanner-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./observability/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - arbiscanner
+
   grafana:
     image: grafana/grafana
     container_name: arbiscanner-grafana
@@ -115,6 +151,8 @@ services:
       - ./ArbiScannerWebApp/grafana/provisioning:/etc/grafana/provisioning
     depends_on:
       - loki
+      - tempo
+      - prometheus
     networks:
       - arbiscanner
 
@@ -143,6 +181,10 @@ services:
       Cors__AllowedOrigins__0: "${WEB_CLIENT_URL}"
       Serilog__WriteTo__1__Name: GrafanaLoki
       Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-web
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
       MongoDb__ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin"
       MongoDb__DatabaseName: "${MONGODB_DATABASE_NAME}"
       MongoDb__CurrentSpreadsCollection: "${MONGODB_CURRENT_SPREADS_COLLECTION}"
@@ -161,6 +203,9 @@ services:
       EmailSettings__SenderEmail: "${SENDER_EMAIL}"
       EmailSettings__SenderPassword: "${SENDER_PASSWORD}"
       EmailSettings__SenderName: "${SENDER_NAME}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-web"
     depends_on:
       postgres:
         condition: service_healthy
@@ -169,6 +214,8 @@ services:
       redis:
         condition: service_started
       loki:
+        condition: service_started
+      tempo:
         condition: service_started
     networks:
       - arbiscanner
@@ -239,12 +286,21 @@ services:
       OxaPay__Sandbox: "${OXAPAY_SANDBOX}"
       Serilog__WriteTo__1__Name: GrafanaLoki
       Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-admin
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-admin"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
       loki:
+        condition: service_started
+      tempo:
         condition: service_started
     networks:
       - arbiscanner
@@ -274,6 +330,8 @@ services:
     image: arbiscanner-telegram-notifier:latest
     container_name: arbiscanner-telegram-notifier
     restart: unless-stopped
+    ports:
+      - "8085:8085"
     environment:
       ConnectionStrings__PostgreSqlConnection: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
       RabbitMq__Host: rabbitmq
@@ -285,12 +343,21 @@ services:
       Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
       Serilog__WriteTo__1__Name: GrafanaLoki
       Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-telegram-notifier
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-telegram-notifier"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
       loki:
+        condition: service_started
+      tempo:
         condition: service_started
     networks:
       - arbiscanner
@@ -305,6 +372,8 @@ services:
     container_name: arbiscanner-arbitrage-scanner
     restart: unless-stopped
     entrypoint: ["/bin/sh", "-c", "timeout 14400 dotnet ArbitrageScanner.Worker.dll; exit 0"]
+    ports:
+      - "8086:8085"
     environment:
       MongoDb_ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/ArbitrageScanner?authSource=admin"
       RABBITMQ_HOST: rabbitmq
@@ -318,10 +387,15 @@ services:
       Arbitrage__Futures: "${ARBITRAGE_FUTURES}"
       Arbitrage__Funding: "${ARBITRAGE_FUNDING}"
       Arbitrage__Spot: "${ARBITRAGE_SPOT}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-arbitrage-scanner"
     depends_on:
       rabbitmq:
         condition: service_healthy
       mongodb:
+        condition: service_started
+      tempo:
         condition: service_started
     networks:
       - arbiscanner
@@ -332,6 +406,8 @@ volumes:
   mongodb-data:
   loki-data:
   grafana-data:
+  tempo-data:
+  prometheus-data:
   certbot-etc:
   certbot-www:
 
