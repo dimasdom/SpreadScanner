@@ -110,6 +110,8 @@ graph TB
 | `redis`              | 6379          | Cache and distributed state                       | Redis                                   |
 | `mongodb`            | 27017         | Ticker and spread document store                  | MongoDB                                 |
 | `loki`               | 3100          | Log aggregation                                   | Grafana Loki                            |
+| `tempo`              | 3200 / 4317 / 4318 | Distributed trace storage (OTLP gRPC/HTTP)   | Grafana Tempo                           |
+| `prometheus`         | 9090          | Metrics collection and storage                    | Prometheus                              |
 | `grafana`            | 3000          | Observability dashboards                          | Grafana                                 |
 
 ---
@@ -223,6 +225,8 @@ docker compose up --build -d
 | http://localhost:8081        | Admin Web API                  |
 | http://localhost:15672       | RabbitMQ management UI         |
 | http://localhost:3000        | Grafana dashboards             |
+| http://localhost:9090        | Prometheus metrics UI          |
+| http://localhost:3200        | Grafana Tempo query API        |
 
 Default RabbitMQ credentials: `guest / guest`. Set Grafana credentials via `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`.
 
@@ -285,6 +289,8 @@ Create a `.env` file in the repository root. The table below lists every variabl
 | `GRAFANA_ADMIN_USER`    | Grafana admin username             | `admin`                      |
 | `GRAFANA_ADMIN_PASSWORD`| Grafana admin password             | `changeme`                   |
 | `LOKI_URI`              | Loki ingest endpoint (internal)    | `http://loki:3100`           |
+
+> **Observability note:** All four .NET services export OpenTelemetry traces to Grafana Tempo via OTLP gRPC (`http://tempo:4317` in Docker, `http://localhost:4317` for local dev). Metrics are scraped by Prometheus from each service's `/metrics` endpoint (web APIs) or a standalone HTTP listener on port 8085 (worker services). The `OpenTelemetry__Endpoint` environment variable in `docker-compose.yml` overrides the default `appsettings.json` value for each service.
 
 ### JWT — User Web App
 
