@@ -402,7 +402,6 @@ services:
     image: arbitrage-scanner:latest
     container_name: arbiscanner-arbitrage-scanner
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "-c", "timeout 14400 dotnet ArbitrageScanner.Worker.dll; exit 0"]
     ports:
       - "8086:8085"
     environment:
