@@ -74,6 +74,11 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - arbiscanner
 
@@ -88,6 +93,14 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD}"
     volumes:
       - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet",
+             "-u", "${MONGODB_USERNAME}", "-p", "${MONGODB_PASSWORD}",
+             "--authenticationDatabase", "admin",
+             "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - arbiscanner
 
@@ -206,13 +219,18 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-web"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       loki:
         condition: service_started
       tempo:
@@ -293,11 +311,16 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-admin"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       loki:
         condition: service_started
       tempo:
@@ -340,6 +363,7 @@ services:
       RabbitMq__Password: guest
       RabbitMq__Exchange: spread_fanout_exchange
       RabbitMq__RoutingKey: ""
+      Redis__Endpoint: redis:6379
       Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
       Serilog__WriteTo__1__Name: GrafanaLoki
       Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
@@ -350,10 +374,17 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-telegram-notifier"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       loki:
         condition: service_started
@@ -390,11 +421,16 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-arbitrage-scanner"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       rabbitmq:
         condition: service_healthy
       mongodb:
-        condition: service_started
+        condition: service_healthy
       tempo:
         condition: service_started
     networks:
