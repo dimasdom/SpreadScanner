@@ -1,0 +1,29 @@
+name: Docker builds
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docker-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build arbitrage-scanner image
+        run: docker build -t arbitrage-scanner -f ArbitrageScanner/ArbitrageScanner.Worker/Dockerfile ArbitrageScanner
+
+      - name: Build web API image (repo-root context)
+        run: docker build -t web -f ArbiScannerWebApp/Dockerfile .
+
+      - name: Build admin API image (repo-root context)
+        run: docker build -t admin-api -f ArbiScannerAdminPannel/Dockerfile .
+
+      - name: Build telegram-notifier image (repo-root context)
+        run: docker build -t telegram-notifier -f ArbiScanner.TelegramNotifierApp/Dockerfile .
