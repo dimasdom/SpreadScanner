@@ -13,6 +13,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 - Phase A: `.editorconfig` + `Directory.Build.props` (nullable-safe analyzers, `TreatWarningsAsErrors`) and a GitHub Actions CI workflow in each of the four submodules; a root Docker-build workflow for the three services needing repo-root build context.
 - Phase B: durable `spread_api`/`spread_telegram` queues with a `spread_dlx` dead-letter exchange, RabbitMQ publisher confirms, corrected consumer ack timing (ack now waits for the handler to actually finish), Redis-based idempotency dedupe on `(queue, Guid, ActionType)`, Polly retry policies on both publish and consume, and `/health` endpoints (Postgres/Mongo/Redis/RabbitMQ) on all four services wired into `docker-compose.yml`.
 - Phase C: `docs/investigations/scanner-memory-leak.md` — investigation into the scanner's 4-hour forced restart. Inconclusive on root cause, but found and fixed a real inefficiency (`ProxyService` churning a new `HttpClient` per proxy rotation instead of reusing one), and removed the `timeout 14400` restart wrapper on that basis.
+- Phase D: a real OxaPay payment webhook receiver (`POST api/payments/webhook` on AdminPanel), verifying the HMAC-SHA512 signature over the raw request body before processing — payment status was previously confirmed purely by polling, since no webhook endpoint existed at all.
 
 ### Fixed
 - `ArbitrageScanner.Tests` wasn't referenced in `ArbitrageScanner.sln`, so `dotnet test` silently skipped 37 tests.
