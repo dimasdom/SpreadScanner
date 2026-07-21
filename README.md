@@ -14,6 +14,7 @@ A cryptocurrency arbitrage scanning platform that monitors 12+ exchanges for fut
 - [Environment Variables](#environment-variables)
 - [Local Development](#local-development)
 - [Git Submodules](#git-submodules)
+- [Documentation](#documentation)
 
 ---
 
@@ -422,7 +423,7 @@ dotnet run
 
 Requires .NET 9 SDK. Set `MongoDb_ConnectionString` and `RABBITMQ_HOST` in environment or `appsettings.Development.json`. The scanning mode (futures / funding / spot) is controlled via the `Arbitrage__*` environment variables.
 
-> **Note:** In production the `arbitrage-scanner` container is launched with a 4-hour (`14400 s`) timeout via `timeout 14400 dotnet ArbitrageScanner.Worker.dll` and Docker's `restart: unless-stopped` policy to periodically recycle the scanner process.
+> **Note:** the scanner no longer force-restarts every 4 hours. That `timeout 14400` wrapper was removed after a leak investigation (`docs/investigations/scanner-memory-leak.md`) — see `docs/completed-work-summary.md` for the full write-up, including why the result was inconclusive on root cause even though the wrapper was removed anyway.
 
 ---
 
@@ -465,3 +466,17 @@ Each submodule is pinned to a specific commit in this repository. After updating
 git add ArbiScannerWebApp   # or whichever submodule changed
 git commit -m "chore: update ArbiScannerWebApp submodule"
 ```
+
+---
+
+## Documentation
+
+| Doc | What it's for |
+|---|---|
+| `docs/roadmap.md` | Fix plan for confirmed gaps (RabbitMQ resilience, OxaPay webhook verification, dev hygiene/CI, scanner leak investigation) |
+| `docs/completed-work-summary.md` | What was actually done against that plan, and why — the narrative version, for explaining the work to someone else |
+| `docs/investigations/scanner-memory-leak.md` | The scanner leak investigation write-up: methodology, evidence, and an honest negative result on root cause |
+| `docs/adr/` | Architecture decision records (planned, not yet written) |
+| `CHANGELOG.md` | Terse, dated entries per phase of work |
+
+Each submodule also has its own `README.md` covering its architecture, configuration, testing, and CI in detail.
