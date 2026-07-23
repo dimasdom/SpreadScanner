@@ -8,7 +8,7 @@ This is the **monorepo root** for ArbiScanner, a cryptocurrency arbitrage scanni
 
 | Submodule directory | Purpose | Runtime |
 |---|---|---|
-| `ArbitrageScanner` | Core scanning engine — scans 12+ exchanges via ccxt, detects spreads, publishes to RabbitMQ | .NET 9 Worker |
+| `ArbitrageScanner` | Core scanning engine — scans 12+ exchanges via ccxt, detects spreads, publishes to RabbitMQ | .NET 10 Worker |
 | `ArbiScannerWebApp` | User-facing API + React SPA — consumes spreads, serves them via REST/SignalR | .NET 10 + React 19 |
 | `ArbiScannerAdminPannel` | Admin/manager API + React SPA — users, subscriptions, OxaPay payments | .NET 10 + React 19 |
 | `ArbiScanner.TelegramNotifierApp` | Telegram bot + notification worker | .NET 10 Worker |

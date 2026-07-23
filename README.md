@@ -28,7 +28,7 @@ graph TB
         OXAPAY["OxaPay\nPayments"]
     end
 
-    subgraph scanner ["ArbitrageScanner  ·  .NET 9 Worker"]
+    subgraph scanner ["ArbitrageScanner  ·  .NET 10 Worker"]
         PROXY["Proxy Pool\n(rotating)"]
         STRATS["Futures / Funding Rate / Spot-Futures\nStrategies  (ccxt · parallel workers)"]
         PUBLISHER["Protobuf Publisher"]
@@ -100,7 +100,7 @@ graph TB
 
 | Docker service       | Port(s)       | Purpose                                           | Technology                              |
 |----------------------|---------------|---------------------------------------------------|-----------------------------------------|
-| `arbitrage-scanner`  | —             | Core arbitrage engine; scans exchanges            | .NET 9, CCXT, RabbitMQ, MongoDB         |
+| `arbitrage-scanner`  | —             | Core arbitrage engine; scans exchanges            | .NET 10, CCXT, RabbitMQ, MongoDB        |
 | `web`                | 8080          | User-facing Web API                               | ASP.NET Core 10, PostgreSQL, Redis, MongoDB, SignalR |
 | `web-client`         | 80            | User-facing React SPA (spread dashboard)          | React, Vite, nginx                      |
 | `admin-api`          | 8081          | Admin Web API (users, subscriptions, payments)    | ASP.NET Core 10, PostgreSQL, Redis      |
@@ -155,7 +155,7 @@ ArbiScanner/                          ← monorepo root (this repo)
 │   └── Dockerfile
 │
 └── ArbitrageScanner/                 ← submodule: core scanning engine
-    ├── ArbitrageScanner.Worker/      ← .NET 9 hosted service entry point
+    ├── ArbitrageScanner.Worker/      ← .NET 10 hosted service entry point
     ├── ArbitrageScanner.Futures/     ← futures spread scanner
     ├── ArbitrageScanner.Funding/     ← funding-rate scanner
     ├── ArbitrageScanner.Spot/        ← spot price scanner
@@ -172,8 +172,7 @@ ArbiScanner/                          ← monorepo root (this repo)
 |-------------------|----------|-------------------------------------------|
 | Docker            | 24+      | All containerised services                |
 | Docker Compose    | v2       | Orchestration (`docker compose` command)  |
-| .NET SDK          | 10       | ArbiScannerWebApp, AdminPannel, TelegramNotifierApp local dev |
-| .NET SDK          | 9        | ArbitrageScanner local dev                |
+| .NET SDK          | 10       | All four submodules local dev             |
 | Node.js           | 20+      | React/Vite clients local dev              |
 
 ---
@@ -414,14 +413,14 @@ dotnet run
 
 Ensure `TELEGRAM_BOT_TOKEN` and RabbitMQ / PostgreSQL connection strings are set in `appsettings.Development.json` or as environment variables.
 
-### ArbitrageScanner (.NET 9 Worker)
+### ArbitrageScanner (.NET 10 Worker)
 
 ```bash
 cd ArbitrageScanner/ArbitrageScanner.Worker
 dotnet run
 ```
 
-Requires .NET 9 SDK. Set `MongoDb_ConnectionString` and `RABBITMQ_HOST` in environment or `appsettings.Development.json`. The scanning mode (futures / funding / spot) is controlled via the `Arbitrage__*` environment variables.
+Requires .NET 10 SDK. Set `MongoDb_ConnectionString` and `RABBITMQ_HOST` in environment or `appsettings.Development.json`. The scanning mode (futures / funding / spot) is controlled via the `Arbitrage__*` environment variables.
 
 > **Note:** the scanner no longer force-restarts every 4 hours. That `timeout 14400` wrapper was removed after a leak investigation (`docs/investigations/scanner-memory-leak.md`) — see `docs/completed-work-summary.md` for the full write-up, including why the result was inconclusive on root cause even though the wrapper was removed anyway.
 
