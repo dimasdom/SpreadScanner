@@ -23,6 +23,14 @@
 #   8081  - ArbiScannerAdminPannel .NET API
 #   8085  - Worker metrics (Prometheus scrape)
 #   9090  - Prometheus
+#
+# The gateway nginx (web-client, port 80/443) also reverse-proxies:
+#   /admin/      -> admin-client (React SPA, built with --base=/admin/)
+#   /admin/api/  -> admin-api
+#   /grafana/    -> grafana      (GF_SERVER_SERVE_FROM_SUB_PATH=true)
+#   /prometheus/ -> prometheus   (--web.route-prefix=/prometheus/, nginx basic-auth gated —
+#                                  see ArbiScannerWebApp/nginx/prometheus.htpasswd.example)
+#   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
 
 services:
 
@@ -60,6 +68,8 @@ services:
       RABBITMQ_DEFAULT_PASS: guest
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      # Serves the management UI behind the gateway nginx at /rabbitmq/
+      - ./observability/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
@@ -143,6 +153,9 @@ services:
       - --config.file=/etc/prometheus/prometheus.yaml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
+      # Served behind the gateway nginx at /prometheus/ — see ArbiScannerWebApp/nginx.conf
+      - --web.external-url=https://www.arbiscannerwebapp.site/prometheus/
+      - --web.route-prefix=/prometheus/
     volumes:
       - ./observability/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
       - prometheus-data:/prometheus
@@ -159,6 +172,9 @@ services:
       GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # Served behind the gateway nginx at /grafana/ — see ArbiScannerWebApp/nginx.conf
+      GF_SERVER_ROOT_URL: "https://www.arbiscannerwebapp.site/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./ArbiScannerWebApp/grafana/provisioning:/etc/grafana/provisioning
@@ -219,6 +235,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-web"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -253,8 +270,16 @@ services:
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-www:/var/www/certbot
+      # Basic-auth credentials for the /prometheus/ route — generate with:
+      #   htpasswd -c ArbiScannerWebApp/nginx/prometheus.htpasswd <username>
+      # (not committed — see ArbiScannerWebApp/nginx/prometheus.htpasswd.example)
+      - ./ArbiScannerWebApp/nginx/prometheus.htpasswd:/etc/nginx/prometheus.htpasswd:ro
     depends_on:
       - web
+      - admin-client
+      - grafana
+      - prometheus
+      - rabbitmq
     networks:
       - arbiscanner
 
@@ -311,6 +336,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-admin"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -374,6 +400,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-telegram-notifier"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s
@@ -420,6 +447,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-arbitrage-scanner"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s
