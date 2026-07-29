@@ -26,10 +26,10 @@
 #
 # The gateway nginx (web-client, port 80/443) also reverse-proxies:
 #   /admin/      -> admin-client (React SPA, built with --base=/admin/)
-#   /admin/api/  -> admin-api
+#   /adminapi/   -> admin-api    (client's ADMIN_API_URL=/adminapi, see sample.env)
 #   /grafana/    -> grafana      (GF_SERVER_SERVE_FROM_SUB_PATH=true)
 #   /prometheus/ -> prometheus   (--web.route-prefix=/prometheus/, nginx basic-auth gated —
-#                                  see ArbiScannerWebApp/nginx/prometheus.htpasswd.example)
+#                                  credentials come from PROMETHEUS_BASIC_AUTH_USER/PASSWORD)
 #   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
 
 services:
@@ -153,7 +153,7 @@ services:
       - --config.file=/etc/prometheus/prometheus.yaml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=15d
-      # Served behind the gateway nginx at /prometheus/ — see ArbiScannerWebApp/nginx.conf
+      # Served behind the gateway nginx at /prometheus/ — see nginx/nginx.conf
       - --web.external-url=https://www.arbiscannerwebapp.site/prometheus/
       - --web.route-prefix=/prometheus/
     volumes:
@@ -172,7 +172,7 @@ services:
       GF_SECURITY_ADMIN_USER: "${GRAFANA_ADMIN_USER}"
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD}"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
-      # Served behind the gateway nginx at /grafana/ — see ArbiScannerWebApp/nginx.conf
+      # Served behind the gateway nginx at /grafana/ — see nginx/nginx.conf
       GF_SERVER_ROOT_URL: "https://www.arbiscannerwebapp.site/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:
@@ -257,8 +257,10 @@ services:
 
   web-client:
     build:
-      context: ArbiScannerWebApp
-      dockerfile: Dockerfile.client
+      # Root context: the gateway nginx config lives at ./nginx (repo root, not the
+      # submodule) since it routes to all four submodules plus Grafana/Prometheus/RabbitMQ.
+      context: .
+      dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
         VITE_API_URL: ""
     image: arbiscanner-web-client:latest
@@ -267,13 +269,16 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # Basic-auth credentials for the /prometheus/ route — the container builds
+      # /etc/nginx/prometheus.htpasswd from these at startup (see
+      # nginx/40-generate-prometheus-htpasswd.sh). Leaving them
+      # unset locks the route to everyone rather than leaving it unauthenticated.
+      PROMETHEUS_BASIC_AUTH_USER: "${PROMETHEUS_BASIC_AUTH_USER}"
+      PROMETHEUS_BASIC_AUTH_PASSWORD: "${PROMETHEUS_BASIC_AUTH_PASSWORD}"
     volumes:
       - certbot-etc:/etc/letsencrypt
       - certbot-www:/var/www/certbot
-      # Basic-auth credentials for the /prometheus/ route — generate with:
-      #   htpasswd -c ArbiScannerWebApp/nginx/prometheus.htpasswd <username>
-      # (not committed — see ArbiScannerWebApp/nginx/prometheus.htpasswd.example)
-      - ./ArbiScannerWebApp/nginx/prometheus.htpasswd:/etc/nginx/prometheus.htpasswd:ro
     depends_on:
       - web
       - admin-client
