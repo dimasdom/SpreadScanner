@@ -45,7 +45,8 @@ services:
       POSTGRES_PASSWORD: su1234
       POSTGRES_DB: ArbiScannerBot
     ports:
-      - "5432:5432"
+      # Bound to localhost only — reach it from outside via SSH tunnel, not a public port.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
@@ -97,7 +98,8 @@ services:
     container_name: arbiscanner-mongodb
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      # Bound to localhost only — reach it from outside via SSH tunnel, not a public port.
+      - "127.0.0.1:27017:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: "${MONGODB_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGODB_PASSWORD}"
@@ -220,8 +222,11 @@ services:
       MongoDb__SpreadsTickerCollection: "${MONGODB_SPREADS_TICKER_COLLECTION}"
       AdminApiUrl: http://admin-api:8080
       ClientUrl: "${WEB_CLIENT_URL}"
-      AdminUser__UserName: "${ADMIN_USERNAME}"
-      AdminUser__Password: "${ADMIN_PASSWORD}"
+      # AdminService only calls endpoints gated by [Authorize] (any role), not
+      # [Authorize(Roles = "Administrator")] — a Manager account is sufficient
+      # and keeps the full Administrator credentials out of this service.
+      AdminUser__UserName: "${MANAGER_USERNAME}"
+      AdminUser__Password: "${MANAGER_PASSWORD}"
       Jwt__SigningKey: "${JWT_SIGNING_KEY_WEBAPP}"
       Jwt__Issuer: "${JWT_ISSUER_WEBAPP}"
       Jwt__Audience: "${JWT_AUDIENCE_WEBAPP}"
