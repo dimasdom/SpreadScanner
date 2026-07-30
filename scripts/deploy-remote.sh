@@ -34,6 +34,22 @@ deploy_tag() {
   docker compose up -d --no-deps "$SERVICE"
 }
 
+# Persists the deployed tag to .env so it survives beyond this SSH session - without
+# this, any later plain `docker compose up`/reboot falls back to the compose file's
+# ${..._IMAGE_TAG:-latest} default and silently reuses whatever stale `latest` image
+# is already cached locally, instead of the tag that actually passed the health check.
+persist_tag() {
+  local tag="$1"
+  local env_file=".env"
+  touch "$env_file"
+  if grep -q "^${TAG_VAR}=" "$env_file"; then
+    sed -i.bak "s|^${TAG_VAR}=.*|${TAG_VAR}=${tag}|" "$env_file" && rm -f "${env_file}.bak"
+  else
+    echo "${TAG_VAR}=${tag}" >> "$env_file"
+  fi
+  echo "[$SERVICE] persisted ${TAG_VAR}=${tag} to $env_file"
+}
+
 # web-client/admin-client have no Docker HEALTHCHECK configured anywhere (no
 # HEALTHCHECK instruction in their Dockerfiles, no healthcheck: key in their
 # compose service blocks) - fall back to "still running, hasn't restarted"
@@ -63,11 +79,13 @@ deploy_tag "$NEW_TAG"
 
 if health_check; then
   echo "[$SERVICE] healthy on $NEW_TAG."
+  persist_tag "$NEW_TAG"
 else
   echo "[$SERVICE] FAILED health check on $NEW_TAG - rolling back to $PREV_TAG." >&2
   deploy_tag "$PREV_TAG"
   if health_check; then
     echo "[$SERVICE] rollback to $PREV_TAG succeeded." >&2
+    persist_tag "$PREV_TAG"
   else
     echo "[$SERVICE] rollback to $PREV_TAG ALSO failed health check - manual intervention required." >&2
   fi
