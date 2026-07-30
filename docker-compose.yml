@@ -193,7 +193,7 @@ services:
     build:
       context: .
       dockerfile: ArbiScannerWebApp/Dockerfile
-    image: arbiscanner-web:latest
+    image: ghcr.io/dimasdom/arbiscanner-web:${WEB_IMAGE_TAG:-latest}
     container_name: arbiscanner-web
     restart: unless-stopped
     ports:
@@ -241,6 +241,7 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-web"
       Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -268,7 +269,7 @@ services:
       dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
         VITE_API_URL: ""
-    image: arbiscanner-web-client:latest
+    image: ghcr.io/dimasdom/arbiscanner-web-client:${WEB_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-web-client
     restart: unless-stopped
     ports:
@@ -310,7 +311,7 @@ services:
     build:
       context: .
       dockerfile: ArbiScannerAdminPannel/Dockerfile
-    image: arbiscanner-admin-api:latest
+    image: ghcr.io/dimasdom/arbiscanner-admin-api:${ADMIN_API_IMAGE_TAG:-latest}
     container_name: arbiscanner-admin-api
     restart: unless-stopped
     ports:
@@ -347,6 +348,7 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-admin"
       Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -370,7 +372,7 @@ services:
       dockerfile: Dockerfile.client
       args:
         VITE_API_URL: "${ADMIN_API_URL}"
-    image: arbiscanner-admin-client:latest
+    image: ghcr.io/dimasdom/arbiscanner-admin-client:${ADMIN_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-admin-client
     restart: unless-stopped
     ports:
@@ -386,7 +388,7 @@ services:
     build:
       context: .
       dockerfile: ArbiScanner.TelegramNotifierApp/Dockerfile
-    image: arbiscanner-telegram-notifier:latest
+    image: ghcr.io/dimasdom/arbiscanner-telegram-notifier:${TELEGRAM_NOTIFIER_IMAGE_TAG:-latest}
     container_name: arbiscanner-telegram-notifier
     restart: unless-stopped
     ports:
@@ -411,6 +413,7 @@ services:
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-telegram-notifier"
       Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 10s
@@ -436,7 +439,7 @@ services:
     build:
       context: ArbitrageScanner
       dockerfile: ArbitrageScanner.Worker/Dockerfile
-    image: arbitrage-scanner:latest
+    image: ghcr.io/dimasdom/arbitrage-scanner:${ARBITRAGE_SCANNER_IMAGE_TAG:-latest}
     container_name: arbiscanner-arbitrage-scanner
     restart: unless-stopped
     ports:
@@ -454,6 +457,15 @@ services:
       Arbitrage__Futures: "${ARBITRAGE_FUTURES}"
       Arbitrage__Funding: "${ARBITRAGE_FUNDING}"
       Arbitrage__Spot: "${ARBITRAGE_SPOT}"
+      ARBITRAGE_EXCHANGE_LIST: "${ARBITRAGE_EXCHANGE_LIST}"
+      ARBITRAGE_PROXY_LIST: "${ARBITRAGE_PROXY_LIST}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-arbitrage-scanner
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "arbiscanner-arbitrage-scanner"
@@ -468,6 +480,8 @@ services:
         condition: service_healthy
       mongodb:
         condition: service_healthy
+      loki:
+        condition: service_started
       tempo:
         condition: service_started
     networks:
