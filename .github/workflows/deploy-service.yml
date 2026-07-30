@@ -290,6 +290,16 @@ jobs:
     if: inputs.dry_run == false
     runs-on: ubuntu-latest
     steps:
+      # Resolved here (not inside the SSH script) because the runner is guaranteed to
+      # have jq - the VPS isn't. Turns {"web":"WEB_IMAGE_TAG",...} into a plain
+      # space-separated "web:WEB_IMAGE_TAG ..." string the remote script can split
+      # with bash parameter expansion alone.
+      - name: Resolve service:tag-var pairs
+        id: resolve_tags
+        run: |
+          PAIRS=$(echo '${{ inputs.image_tag_vars }}' | jq -r 'to_entries | map("\(.key):\(.value)") | join(" ")')
+          echo "pairs=$PAIRS" >> "$GITHUB_OUTPUT"
+
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1
         with:
@@ -302,8 +312,8 @@ jobs:
             cd "${{ secrets.VPS_DEPLOY_PATH }}"
             git pull --ff-only
             TAG="sha-${{ github.sha }}"
-            TAG_VARS='${{ inputs.image_tag_vars }}'
-            for svc in ${{ inputs.deploy_services }}; do
-              var_name=$(echo "$TAG_VARS" | jq -r --arg svc "$svc" '.[$svc]')
+            for pair in ${{ steps.resolve_tags.outputs.pairs }}; do
+              svc="${pair%%:*}"
+              var_name="${pair##*:}"
               bash scripts/deploy-remote.sh "$svc" "$var_name" "$TAG"
             done
