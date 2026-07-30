@@ -140,6 +140,8 @@ jobs:
           /d:sonar.host.url="https://sonarcloud.io"
           /d:sonar.cs.vstest.reportsPaths="TestResults/*.trx"
           /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml"
+          /d:sonar.qualitygate.wait=true
+          /d:sonar.qualitygate.timeout=300
           ${{ inputs.sonar_begin_extra_args }}
 
       - name: Setup Node
@@ -196,17 +198,14 @@ jobs:
           --results-directory ./TestResults
           --collect:"XPlat Code Coverage;Format=opencover"
 
-      # /d:sonar.qualitygate.wait=true makes this step (and therefore the whole job)
-      # fail closed on a red quality gate - this is what blocks build-and-push below.
+      # sonar.qualitygate.wait=true (set on the begin step above) makes this step
+      # (and therefore the whole job) fail closed on a red quality gate - this is
+      # what blocks build-and-push below.
       - name: End SonarCloud analysis (enforces quality gate)
         working-directory: ${{ inputs.self_checkout_path }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: >
-          dotnet-sonarscanner end
-          /d:sonar.token="$SONAR_TOKEN"
-          /d:sonar.qualitygate.wait=true
-          /d:sonar.qualitygate.timeout=300
+        run: dotnet-sonarscanner end /d:sonar.token="$SONAR_TOKEN"
 
       - name: Publish test results
         uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
