@@ -219,9 +219,10 @@ jobs:
       - name: Publish client test results
         if: always() && inputs.has_client_tests
         uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
+        working-directory: ${{ inputs.client_dir }}
         with:
           name: Client Test Results
-          path: "${{ inputs.client_dir }}/TestResults/junit.xml"
+          path: "TestResults/junit.xml"
           reporter: java-junit
 
   build-and-push:
