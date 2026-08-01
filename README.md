@@ -14,6 +14,7 @@ A cryptocurrency arbitrage scanning platform that monitors 12+ exchanges for fut
 - [Environment Variables](#environment-variables)
 - [Local Development](#local-development)
 - [Git Submodules](#git-submodules)
+- [CI/CD](#cicd)
 - [Documentation](#documentation)
 
 ---
@@ -465,6 +466,52 @@ Each submodule is pinned to a specific commit in this repository. After updating
 git add ArbiScannerWebApp   # or whichever submodule changed
 git commit -m "chore: update ArbiScannerWebApp submodule"
 ```
+
+---
+
+## CI/CD
+
+Each submodule is an independently-versioned repo, so each owns its own GitHub Actions workflows (`ci.yml`, `deploy.yml`, and — for the two services with a public HTTP API — `load-test.yml`) with its own Actions tab, secrets, and SonarCloud project. This monorepo root owns two workflows that operate across all four:
+
+| Workflow | Trigger | Purpose |
+|---|---|---|
+| [`.github/workflows/docker-build.yml`](.github/workflows/docker-build.yml) | push / PR to `master` | Sanity-builds all four Docker images (submodules checked out recursively) so a build-breaking change is caught before merge, without needing SonarCloud/GHCR credentials |
+| [`.github/workflows/deploy-service.yml`](.github/workflows/deploy-service.yml) | `workflow_call` only (reusable) | Shared test → build-and-push → deploy pipeline, called by each submodule's own `deploy.yml` — see below |
+
+### Per-submodule CI (`ci.yml`)
+
+Every submodule's `ci.yml` runs on push/PR to its `main` branch and, in order: restores/builds the solution with analyzers (`TreatWarningsAsErrors`); runs a SonarCloud scan that blocks the job on a red quality gate (`sonar.qualitygate.wait=true`); runs CodeQL (C#, plus JavaScript/TypeScript for the two projects with a React client); runs unit tests (all four), integration tests (`ArbitrageScanner`, `ArbiScannerWebApp`, `ArbiScannerAdminPannel`), and client tests (`ArbiScannerWebApp`, `ArbiScannerAdminPannel`); then publishes `.trx`/JUnit results via `dorny/test-reporter`. `ArbiScannerAdminPannel` and `ArbiScanner.TelegramNotifierApp` additionally check out one or two sibling submodule repos in this job, since their `.sln`/`.slnx` reference project files across repo boundaries (see [Cross-submodule references](#cross-submodule-references-important-non-obvious) above).
+
+### Deploy workflow (`deploy.yml` + reusable `deploy-service.yml`)
+
+Each submodule has its own manually-triggered `deploy.yml` (`workflow_dispatch`, with an optional `dry_run` boolean input) that calls this repo's reusable `deploy-service.yml`, passing its own solution file, test projects, SonarCloud project key, Docker image list, and VPS compose service names. The reusable workflow runs three jobs:
+
+1. **`test`** — the same restore/build/SonarCloud/test sequence as `ci.yml` (plus any sibling-repo or client checkout the caller needs), gating everything downstream on a green quality gate.
+2. **`build-and-push`** — builds each image the caller declares via Docker Buildx and pushes it to GHCR tagged `ghcr.io/dimasdom/<image>:latest` and `:sha-<commit>`. Images that need repo-root files (e.g. the WebApp client's `nginx.conf`) sparse-checkout just that folder from this monorepo instead of needing a full `sibling_repos` clone.
+3. **`deploy`** — skipped entirely when `dry_run: true`. SSHes into the VPS (`appleboy/ssh-action`), `git pull --ff-only`s the deploy checkout, and runs `scripts/deploy-remote.sh <service> <image-tag-var> sha-<commit>` for each compose service the caller lists, in dependency order.
+
+Secrets are configured once per submodule repo (each pushes only the GHCR package(s) it owns, using its own repo's `GITHUB_TOKEN`):
+
+| Secret | Purpose |
+|---|---|
+| `SONAR_TOKEN` | SonarCloud auth |
+| `VPS_HOST` / `VPS_USER` / `VPS_SSH_KEY` / `VPS_SSH_PORT` | SSH connection to the deploy target |
+| `VPS_DEPLOY_PATH` | Directory on the VPS the compose stack lives in |
+
+No separate GHCR secret is needed — pushing just requires "Read and write permissions" enabled under each repo's **Settings → Actions → General**.
+
+### Load testing (`load-test.yml`)
+
+`ArbiScannerWebApp` and `ArbiScannerAdminPannel` each have a `load-test.yml`: manually dispatchable with `queries_per_minute`/`duration_seconds` inputs, plus a nightly `0 3 * * *` cron at the defaults. Both run behind a `load-test` GitHub Environment holding the target instance's base URL and a real login for that environment — see each submodule's own README for the endpoint(s) exercised and required secrets.
+
+### Workflow inventory by submodule
+
+| Submodule | `ci.yml` | `deploy.yml` | `load-test.yml` |
+|---|---|---|---|
+| `ArbitrageScanner` | ✅ | ✅ | — |
+| `ArbiScannerWebApp` | ✅ | ✅ | ✅ |
+| `ArbiScannerAdminPannel` | ✅ | ✅ | ✅ |
+| `ArbiScanner.TelegramNotifierApp` | ✅ | ✅ | — |
 
 ---
 
