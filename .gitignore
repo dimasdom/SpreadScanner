@@ -1,3 +1,5 @@
 .env
+.env.local
+.env.*.local
 .DS_Store
 docs/completed-work-summary.md

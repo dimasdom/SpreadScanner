@@ -1,0 +1,203 @@
+{
+  "realm": "arbiscanner-admin",
+  "enabled": true,
+  "displayName": "ArbiScanner Admin",
+  "loginTheme": "arbiscanner",
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "registrationEmailAsUsername": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "verifyEmail": false,
+  "rememberMe": true,
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "requiredActions": [
+    {
+      "alias": "UPDATE_PASSWORD",
+      "name": "Update Password",
+      "providerId": "UPDATE_PASSWORD",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 30,
+      "config": {}
+    },
+    {
+      "alias": "UPDATE_PROFILE",
+      "name": "Update Profile",
+      "providerId": "UPDATE_PROFILE",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 40,
+      "config": {}
+    },
+    {
+      "alias": "CONFIGURE_TOTP",
+      "name": "Configure OTP",
+      "providerId": "CONFIGURE_TOTP",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 10,
+      "config": {}
+    }
+  ],
+  "smtpServer": {
+    "host": "",
+    "port": "",
+    "from": "",
+    "fromDisplayName": "ArbiScanner Admin",
+    "auth": "true",
+    "user": "",
+    "password": "",
+    "ssl": "false",
+    "starttls": "true"
+  },
+  "roles": {
+    "realm": [
+      {
+        "name": "Administrator",
+        "description": "Full access — matches today's [Authorize(Roles = \"Administrator\")] endpoints."
+      },
+      {
+        "name": "Manager",
+        "description": "Bare-authenticated-staff access only — matches today's [Authorize] (any role) endpoints, deliberately excluded from Administrator-only actions."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "arbiscanner-admin-spa",
+      "name": "ArbiScanner Admin SPA",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://www.arbiscannerwebapp.site/admin/*##http://localhost:5174/*"
+      },
+      "redirectUris": [
+        "https://www.arbiscannerwebapp.site/admin/auth/callback",
+        "http://localhost:5174/auth/callback"
+      ],
+      "webOrigins": [
+        "https://www.arbiscannerwebapp.site",
+        "http://localhost:5174"
+      ],
+      "protocolMappers": [
+        {
+          "name": "audience-arbiscanner-admin-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "arbiscanner-admin-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles-flat",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "role",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "arbiscanner-admin-service",
+      "name": "ArbiScanner Admin Service Account",
+      "description": "Server-to-server client for ArbiScannerWeb's AdminService (Client Credentials grant). Service account is Manager-role only — see keycloak/configure-admin-users.sh.",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "protocolMappers": [
+        {
+          "name": "audience-arbiscanner-admin-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "arbiscanner-admin-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles-flat",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "role",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "arbiscanner-admin-loadtest",
+      "name": "ArbiScanner Admin Load Test Tool",
+      "description": "Direct-grant client for ArbiScannerAdminPanel.LoadTests (see sample.env ADMINPANEL_LOADTEST_* vars) — kept separate so the browser-facing SPA client stays PKCE-only.",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audience-arbiscanner-admin-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "arbiscanner-admin-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles-flat",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "role",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

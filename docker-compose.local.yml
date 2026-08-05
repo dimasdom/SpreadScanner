@@ -1,0 +1,21 @@
+# Local-dev-only override — NOT auto-loaded by `docker compose up` (unlike
+# docker-compose.override.yml, which Compose merges automatically). This repo's
+# docker-compose.yml doubles as the real production deploy command
+# (`docker compose up --build` from the monorepo root, per CLAUDE.md), so an
+# auto-loaded override would silently change production behavior. Opt in
+# explicitly instead:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+#
+# Exposes Keycloak directly on a host port (bypassing nginx/TLS entirely) and
+# points KC_HOSTNAME at that plain-HTTP address, so a locally-run API
+# (`dotnet run`, ASPNETCORE_ENVIRONMENT=Development) can reach it — see the
+# RequireHttpsMetadata = !environment.IsDevelopment() carve-out in both
+# StartupSetup.AddAuthenticationJwt methods. See keycloak/README.md's "Local
+# development" section for the full one-time setup.
+services:
+  keycloak:
+    ports:
+      - "8082:8080"
+    environment:
+      KC_HOSTNAME: "http://localhost:8082"

@@ -31,6 +31,11 @@
 #   /prometheus/ -> prometheus   (--web.route-prefix=/prometheus/, nginx basic-auth gated —
 #                                  credentials come from PROMETHEUS_BASIC_AUTH_USER/PASSWORD)
 #   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
+#
+# Keycloak (OIDC/OAuth2 for ArbiScannerWebApp, see keycloak/README.md) is NOT
+# path-routed — its own /admin/{realm}/console paths collide with the /admin/
+# route above, so it gets a dedicated subdomain (auth.<domain>) with its own
+# nginx server block instead. See keycloak/README.md for one-time setup.
 
 services:
 
@@ -113,6 +118,35 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - arbiscanner
+
+  keycloak:
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-keycloak:${KEYCLOAK_IMAGE_TAG:-latest}
+    container_name: arbiscanner-keycloak
+    restart: unless-stopped
+    # First service in this compose file to get an explicit memory limit — a
+    # JVM app idles well above the lean .NET services here, so cap it rather
+    # than let it auto-size against host memory. Tune empirically.
+    mem_limit: 384m
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: "jdbc:postgresql://postgres:5432/keycloak"
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: "${POSTGRES_PASSWORD}"
+      KC_HOSTNAME: "auth.arbiscannerwebapp.site"
+      KC_PROXY_HEADERS: xforwarded
+      # TLS terminates at the gateway nginx (web-client), not here.
+      KC_HTTP_ENABLED: "true"
+      KEYCLOAK_ADMIN: "${KEYCLOAK_ADMIN_USER}"
+      KEYCLOAK_ADMIN_PASSWORD: "${KEYCLOAK_ADMIN_PASSWORD}"
+      JAVA_OPTS_APPEND: "-Xms64m -Xmx256m"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - arbiscanner
 
@@ -222,16 +256,16 @@ services:
       MongoDb__SpreadsTickerCollection: "${MONGODB_SPREADS_TICKER_COLLECTION}"
       AdminApiUrl: http://admin-api:8080
       ClientUrl: "${WEB_CLIENT_URL}"
-      # AdminService only calls endpoints gated by [Authorize] (any role), not
-      # [Authorize(Roles = "Administrator")] — a Manager account is sufficient
-      # and keeps the full Administrator credentials out of this service.
-      AdminUser__UserName: "${MANAGER_USERNAME}"
-      AdminUser__Password: "${MANAGER_PASSWORD}"
-      Jwt__SigningKey: "${JWT_SIGNING_KEY_WEBAPP}"
-      Jwt__Issuer: "${JWT_ISSUER_WEBAPP}"
-      Jwt__Audience: "${JWT_AUDIENCE_WEBAPP}"
-      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
-      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      # AdminService authenticates via OAuth2 Client Credentials against the
+      # arbiscanner-admin-service client, whose service account is assigned
+      # only the Manager realm role — [Authorize] (any role) endpoints, not
+      # [Authorize(Roles = "Administrator")] ones. Replaces the old
+      # Manager-username/password login (see keycloak/configure-admin-users.sh).
+      Keycloak__AdminService__Authority: "${OIDC_AUTHORITY_ADMINPANEL}"
+      Keycloak__AdminService__ClientId: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_ID}"
+      Keycloak__AdminService__ClientSecret: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET}"
+      Jwt__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Jwt__Audience: "${OIDC_AUDIENCE_WEBAPP}"
       EmailSettings__SmtpServer: "${SMTP_SERVER}"
       EmailSettings__SmtpPort: "${SMTP_PORT}"
       EmailSettings__SenderEmail: "${SENDER_EMAIL}"
@@ -254,6 +288,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      keycloak:
+        condition: service_started
       loki:
         condition: service_started
       tempo:
@@ -269,6 +305,9 @@ services:
       dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
         VITE_API_URL: ""
+        VITE_OIDC_AUTHORITY: "${OIDC_AUTHORITY_WEBAPP}"
+        VITE_OIDC_CLIENT_ID: "arbiscanner-web-spa"
+        VITE_OIDC_REDIRECT_URI: "${WEB_CLIENT_URL}/auth/callback"
     image: ghcr.io/dimasdom/arbiscanner-web-client:${WEB_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-web-client
     restart: unless-stopped
@@ -291,6 +330,7 @@ services:
       - grafana
       - prometheus
       - rabbitmq
+      - keycloak
     networks:
       - arbiscanner
 
@@ -323,16 +363,14 @@ services:
       ConnectionStrings__AdminConnection: "Host=postgres;Port=5432;Database=ArbiScannerAdminPanelDb;Username=postgres;Password=su1234"
       Redis__Endpoint: redis:6379
       Cors__AllowedOrigins: "${ADMIN_CLIENT_URL}"
-      Seed__Enabled: "${SEED_ENABLED}"
-      Seed__AdminUserName: "${ADMIN_USERNAME}"
-      Seed__AdminPassword: "${ADMIN_PASSWORD}"
-      Seed__ManagerUserName: "${MANAGER_USERNAME}"
-      Seed__ManagerPassword: "${MANAGER_PASSWORD}"
-      Jwt__SigningKey: "${JWT_SIGNING_KEY_ADMINPANEL}"
-      Jwt__Issuer: "${JWT_ISSUER_ADMINPANEL}"
-      Jwt__Audience: "${JWT_AUDIENCE_ADMINPANEL}"
-      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
-      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      Jwt__Authority: "${OIDC_AUTHORITY_ADMINPANEL}"
+      Jwt__Audience: "${OIDC_AUDIENCE_ADMINPANEL}"
+      # UsersService deletes the Keycloak identity (arbiscanner-web realm) when an
+      # admin deletes a user, so the local shadow-row delete actually frees the
+      # account/email up instead of leaving it stuck (see keycloak/README.md).
+      Keycloak__WebRealmAdmin__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Keycloak__WebRealmAdmin__ClientId: "${KEYCLOAK_WEB_ADMIN_OPS_CLIENT_ID}"
+      Keycloak__WebRealmAdmin__ClientSecret: "${KEYCLOAK_WEB_ADMIN_OPS_CLIENT_SECRET}"
       OxaPay__BaseUrl: "${OXAPAY_BASE_URL}"
       OxaPay__MerchantApiKey: "${OXAPAY_MERCHANT_API_KEY}"
       OxaPay__DefaultCurrency: "${OXAPAY_DEFAULT_CURRENCY}"
@@ -359,6 +397,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      keycloak:
+        condition: service_started
       loki:
         condition: service_started
       tempo:
@@ -372,6 +412,9 @@ services:
       dockerfile: Dockerfile.client
       args:
         VITE_API_URL: "${ADMIN_API_URL}"
+        VITE_OIDC_AUTHORITY: "${VITE_OIDC_AUTHORITY_ADMINPANEL}"
+        VITE_OIDC_CLIENT_ID: "${VITE_OIDC_CLIENT_ID_ADMINPANEL}"
+        VITE_OIDC_REDIRECT_URI: "${VITE_OIDC_REDIRECT_URI_ADMINPANEL}"
     image: ghcr.io/dimasdom/arbiscanner-admin-client:${ADMIN_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-admin-client
     restart: unless-stopped
