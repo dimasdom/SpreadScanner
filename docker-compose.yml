@@ -22,6 +22,8 @@
 #   8080  - ArbiScannerWebApp .NET API
 #   8081  - ArbiScannerAdminPannel .NET API
 #   8085  - Worker metrics (Prometheus scrape)
+#   8087  - ArbiScanner.McpServer
+#   8088  - ArbiScanner.AiAssistant
 #   9090  - Prometheus
 #
 # The gateway nginx (web-client, port 80/443) also reverse-proxies:
@@ -30,6 +32,12 @@
 #   /grafana/    -> grafana      (GF_SERVER_SERVE_FROM_SUB_PATH=true)
 #   /prometheus/ -> prometheus   (--web.route-prefix=/prometheus/, nginx basic-auth gated —
 #                                  credentials come from PROMETHEUS_BASIC_AUTH_USER/PASSWORD)
+#   /mcp/        -> mcp-server   (Streamable HTTP MCP transport, requires its own
+#                                  arbiscanner-mcp Keycloak bearer token — see
+#                                  ArbiScanner.McpServer/README.md)
+#   /ai-hub/     -> ai-assistant (SignalR chat hub, same arbiscanner-web-spa bearer
+#                                  token as every other ArbiScannerWeb.API call — see
+#                                  ArbiScanner.AiAssistant/README.md)
 #   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
 #
 # Keycloak (OIDC/OAuth2 for ArbiScannerWebApp, see keycloak/README.md) is NOT
@@ -264,6 +272,13 @@ services:
       Keycloak__AdminService__Authority: "${OIDC_AUTHORITY_ADMINPANEL}"
       Keycloak__AdminService__ClientId: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_ID}"
       Keycloak__AdminService__ClientSecret: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET}"
+      # McpTokenService's Standard Token Exchange grant (arbiscanner-web realm,
+      # arbiscanner-mcp client) — powers the "MCP Access" page's token generation.
+      # ArbiScanner.McpServer itself only validates the tokens this mints, it
+      # doesn't use this client id/secret — see keycloak/README.md step 9.
+      Keycloak__McpExchange__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Keycloak__McpExchange__ClientId: "${KEYCLOAK_MCP_CLIENT_ID}"
+      Keycloak__McpExchange__ClientSecret: "${KEYCLOAK_MCP_CLIENT_SECRET}"
       Jwt__Authority: "${OIDC_AUTHORITY_WEBAPP}"
       Jwt__Audience: "${OIDC_AUDIENCE_WEBAPP}"
       EmailSettings__SmtpServer: "${SMTP_SERVER}"
@@ -522,6 +537,109 @@ services:
       rabbitmq:
         condition: service_healthy
       mongodb:
+        condition: service_healthy
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  # ── ArbiScanner.McpServer ────────────────────────────────────────────────────
+
+  mcp-server:
+    build:
+      context: ArbiScanner.McpServer
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}
+    container_name: arbiscanner-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8087:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # Plain OAuth resource server — validates whatever long-lived (30-day)
+      # personal access token a caller presents (minted by ArbiScannerWeb's
+      # "MCP Access" page) and forwards it unchanged to ArbiScannerWeb.API.
+      # This container never talks to Keycloak itself, so it needs no client
+      # id/secret of its own. See ArbiScanner.McpServer/README.md.
+      Keycloak__Authority: "${OIDC_AUTHORITY_MCP}"
+      Keycloak__Audience: "${OIDC_AUDIENCE_MCP}"
+      WebApi__BaseUrl: "${MCP_WEB_API_URL}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-mcp
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-mcp"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      web:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  # ── ArbiScanner.AiAssistant ──────────────────────────────────────────────────
+
+  ai-assistant:
+    build:
+      context: ArbiScanner.AiAssistant
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-ai-assistant:${AI_ASSISTANT_IMAGE_TAG:-latest}
+    container_name: arbiscanner-ai-assistant
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # Validates the same arbiscanner-web-spa-audienced token the browser already
+      # holds for every other ArbiScannerWeb.API call — no new Keycloak client.
+      Jwt__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Jwt__Audience: "${OIDC_AUDIENCE_WEBAPP}"
+      # Only used to call POST /api/McpToken/Generate, which exchanges the caller's
+      # own token for one scoped to arbiscanner-mcp — see ArbiScanner.AiAssistant/README.md.
+      WebApi__BaseUrl: "${MCP_WEB_API_URL}"
+      McpServer__BaseUrl: "http://mcp-server:8080/mcp"
+      OpenRouter__ApiKey: "${OPENROUTER_API_KEY}"
+      OpenRouter__Model: "${OPENROUTER_MODEL}"
+      Cors__AllowedOrigins__0: "${WEB_CLIENT_URL}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-ai-assistant
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-ai-assistant"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      web:
+        condition: service_healthy
+      mcp-server:
         condition: service_healthy
       loki:
         condition: service_started

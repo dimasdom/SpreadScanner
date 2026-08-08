@@ -74,6 +74,113 @@ and `arbiscanner-admin`, imported automatically from
    identity, not just the local shadow row (see the `manage-users` note
    below).
 
+9. **`arbiscanner-mcp` client + Standard Token Exchange, on an already-deployed
+   realm only**: fresh/local Keycloak instances pick all of this up
+   automatically via `--import-realm` on first boot (see the caveat right
+   below — that only applies the first time a realm is created). On a VPS
+   where `arbiscanner-web` already exists, `--import-realm` silently ignores
+   both the new `clients` entry and the new protocol mapper added to the
+   existing `arbiscanner-web-spa` client in
+   `realm-export/arbiscanner-web-realm.json`, and `apply-realm-updates.sh`
+   only syncs realm-level *attributes* (currently just `loginTheme`), not
+   client creation or mapper changes — so apply both manually, once:
+   ```bash
+   set -a && source .env && set +a
+   docker exec -i arbiscanner-keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+     --server http://localhost:8080 --realm master \
+     --user "$KEYCLOAK_ADMIN_USER" --password "$KEYCLOAK_ADMIN_PASSWORD"
+
+   # 1. Create the arbiscanner-mcp client (standard.token.exchange.enabled
+   #    makes it a valid Standard Token Exchange target — requires the
+   #    Keycloak image to have been built with --features=token-exchange,
+   #    see ../keycloak/Dockerfile).
+   docker exec -i arbiscanner-keycloak /opt/keycloak/bin/kcadm.sh create clients -r arbiscanner-web -f - <<'EOF'
+   {
+     "clientId": "arbiscanner-mcp",
+     "name": "ArbiScanner MCP Server",
+     "enabled": true,
+     "publicClient": false,
+     "protocol": "openid-connect",
+     "standardFlowEnabled": false,
+     "implicitFlowEnabled": false,
+     "directAccessGrantsEnabled": true,
+     "serviceAccountsEnabled": false,
+     "attributes": {
+       "standard.token.exchange.enabled": "true",
+       "access.token.lifespan": "2592000"
+     },
+     "protocolMappers": [
+       {
+         "name": "audience-arbiscanner-mcp",
+         "protocol": "openid-connect",
+         "protocolMapper": "oidc-audience-mapper",
+         "consentRequired": false,
+         "config": { "included.client.audience": "arbiscanner-mcp", "id.token.claim": "false", "access.token.claim": "true" }
+       },
+       {
+         "name": "audience-arbiscanner-web-spa",
+         "protocol": "openid-connect",
+         "protocolMapper": "oidc-audience-mapper",
+         "consentRequired": false,
+         "config": { "included.client.audience": "arbiscanner-web-spa", "id.token.claim": "false", "access.token.claim": "true" }
+       }
+     ]
+   }
+   EOF
+
+   # 2. Add the arbiscanner-mcp audience mapper to the EXISTING arbiscanner-web-spa
+   #    client — Standard Token Exchange requires the requesting client
+   #    (arbiscanner-mcp) to already appear in the subject token's own
+   #    audience, so a user's SPA session token needs this to be usable as
+   #    the subject_token in the exchange (see ArbiScannerWeb.API's
+   #    McpTokenService).
+   SPA_ID=$(docker exec -i arbiscanner-keycloak /opt/keycloak/bin/kcadm.sh get clients -r arbiscanner-web -q "clientId=arbiscanner-web-spa" --fields id \
+     | grep -o '"id"[^,}]*' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+   docker exec -i arbiscanner-keycloak /opt/keycloak/bin/kcadm.sh create "clients/$SPA_ID/protocol-mappers/models" -r arbiscanner-web -f - <<'EOF'
+   {
+     "name": "audience-arbiscanner-mcp",
+     "protocol": "openid-connect",
+     "protocolMapper": "oidc-audience-mapper",
+     "consentRequired": false,
+     "config": { "included.client.audience": "arbiscanner-mcp", "id.token.claim": "false", "access.token.claim": "true" }
+   }
+   EOF
+   ```
+   Then set `arbiscanner-mcp`'s secret (Keycloak admin console → Clients →
+   `arbiscanner-mcp` → Credentials, or `kcadm.sh get clients/<id>/client-secret`)
+   into `KEYCLOAK_MCP_CLIENT_SECRET` — this secret is only used by
+   `ArbiScannerWeb.API`'s `McpTokenService`, to perform the token exchange on
+   a user's behalf (see `Keycloak:McpExchange:ClientSecret`).
+   `ArbiScanner.McpServer` itself holds no client secret at all — it's a plain
+   OAuth resource server that only validates the tokens `McpTokenService`
+   mints, it never talks to Keycloak.
+
+   **Two things confirmed against a real Keycloak 26.4 container** (this
+   mechanism initially shipped with an untested design that turned out to be
+   wrong — see `ArbiScannerWeb.IntegrationTests`' `McpTokenControllerTests`
+   for the tests that pin this behavior):
+   - Standard Token Exchange **rejects**
+     `requested_token_type=urn:ietf:params:oauth:token-type:refresh_token`
+     (`error: invalid_request`) and never issues a usable refresh token
+     regardless — `McpTokenService`'s exchange request omits
+     `requested_token_type` entirely and reads `access_token` off the
+     response, not `refresh_token`.
+   - The `access.token.lifespan` override above only takes effect on an
+     exchanged token if the exchange request also includes
+     `scope=openid offline_access` — that scope is what upgrades the
+     underlying session to an *offline* session, which isn't capped by the
+     realm's `ssoSessionMaxLifespan` (~10h default) the way a normal session
+     is. Drop it and the resulting token's real `exp` claim silently reverts
+     to the short session-bound lifetime even though the client override is
+     still in place.
+
+   If token exchange 401s or 400s, check: is `token-exchange` actually baked
+   into the running image (`kc.sh show-config` or check the build log), does
+   `arbiscanner-mcp` show "Standard token exchange" enabled in the admin
+   console's client Capability config tab, and does a decoded
+   `arbiscanner-web-spa` access token's `aud` claim actually include
+   `arbiscanner-mcp`.
+
 ## Updating an already-deployed realm (VPS)
 
 `--import-realm` only imports a realm the **first** time it sees that realm

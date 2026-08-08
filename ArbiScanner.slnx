@@ -20,6 +20,12 @@
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Infrastructure/ArbiScanner.TelegramNotifierApp.Infrastructure.csproj" />
     <Project Path="ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Worker/ArbiScanner.TelegramNotifierApp.Worker.csproj" />
   </Folder>
+  <Folder Name="/McpServer/">
+    <Project Path="ArbiScanner.McpServer/ArbiScanner.McpServer.Domain/ArbiScanner.McpServer.Domain.csproj" />
+    <Project Path="ArbiScanner.McpServer/ArbiScanner.McpServer.Abstractions/ArbiScanner.McpServer.Abstractions.csproj" />
+    <Project Path="ArbiScanner.McpServer/ArbiScanner.McpServer.Infrastructure/ArbiScanner.McpServer.Infrastructure.csproj" />
+    <Project Path="ArbiScanner.McpServer/ArbiScanner.McpServer.Host/ArbiScanner.McpServer.Host.csproj" />
+  </Folder>
   <Folder Name="/ArbitrageScanner/">
     <Project Path="ArbitrageScanner/ArbitrageScanner.Domain/ArbitrageScanner.Domain.csproj" />
     <Project Path="ArbitrageScanner/ArbitrageScanner.Infrastructure/ArbitrageScanner.Infrastructure.csproj" />

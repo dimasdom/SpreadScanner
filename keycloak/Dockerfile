@@ -6,8 +6,12 @@ FROM quay.io/keycloak/keycloak:26.4 AS builder
 
 ENV KC_DB=postgres
 # Trim the feature set to what this deployment actually uses — no clustering,
-# no non-Postgres storage providers.
-RUN /opt/keycloak/bin/kc.sh build --db=postgres
+# no non-Postgres storage providers. token-exchange is needed for the
+# arbiscanner-mcp client's Standard Token Exchange (RFC 8693, officially
+# supported since Keycloak 26.2) — see ArbiScanner.McpServer/README.md and
+# ArbiScannerWeb.API's McpTokenService for what it's used for. Features baked
+# in at build time (per `kc.sh build`'s own docs) aren't toggleable at runtime.
+RUN /opt/keycloak/bin/kc.sh build --db=postgres --features=token-exchange
 
 FROM quay.io/keycloak/keycloak:26.4
 COPY --from=builder /opt/keycloak/ /opt/keycloak/

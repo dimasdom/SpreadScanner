@@ -65,7 +65,29 @@ graph TB
     subgraph clients ["Clients"]
         WEB_CLIENT["WebApp React SPA\nRedux Toolkit · SignalR Client"]
         ADMIN_CLIENT["AdminPanel React SPA\nRedux Toolkit"]
+        MCP_CLIENT["External MCP Client\n(Claude Desktop, etc.)"]
     end
+
+    subgraph mcp ["ArbiScanner.McpServer  ·  .NET 10"]
+        MCP_SERVER["MCP Tools\nget_spreads_for_current_user\nget_spread_by_id"]
+    end
+
+    subgraph aiassistant ["ArbiScanner.AiAssistant  ·  .NET 10"]
+        CHAT_HUB["SignalR ChatHub\nno conversation history"]
+        AI_MODEL["IAiChatModel\n(OpenRouter, tool-calling)"]
+    end
+
+    OPENROUTER["OpenRouter\n(LLM inference)"]
+
+    WEB_CLIENT -->|"MCP Access" page: generate personal long-lived token| WEB_API
+    MCP_CLIENT -->|same token, as bearer| MCP_SERVER
+    MCP_SERVER -->|forwarded unchanged, same caller's identity| WEB_API
+
+    WEB_CLIENT -->|chat widget: arbiscanner-web-spa token, SignalR| CHAT_HUB
+    CHAT_HUB -->|exchange for arbiscanner-mcp token| WEB_API
+    CHAT_HUB -->|list/call tools, exchanged token| MCP_SERVER
+    CHAT_HUB --> AI_MODEL
+    AI_MODEL --> OPENROUTER
 
     EXCHANGES -->|market data| PROXY
     PROXY -->|proxied HTTP| STRATS
@@ -107,6 +129,8 @@ graph TB
 | `admin-api`          | 8081          | Admin Web API (users, subscriptions, payments)    | ASP.NET Core 10, PostgreSQL, Redis      |
 | `admin-client`       | 3002          | Admin React SPA                                   | React, Vite, nginx                      |
 | `telegram-notifier`  | —             | Sends Telegram spread alerts to subscribers       | .NET 10, RabbitMQ, Telegram.Bot SDK     |
+| `mcp-server`         | 8087          | MCP server exposing spread-query tools            | ASP.NET Core 10, ModelContextProtocol SDK |
+| `ai-assistant`       | 8088          | AI chat assistant backend (SignalR ChatHub)       | ASP.NET Core 10, ModelContextProtocol SDK, OpenRouter |
 | `postgres`           | 5432          | Relational database (shared + admin schemas)      | PostgreSQL                              |
 | `rabbitmq`           | 5672 / 15672  | Message broker; management UI on 15672            | RabbitMQ 3 with management plugin       |
 | `redis`              | 6379          | Cache and distributed state                       | Redis                                   |
@@ -153,6 +177,21 @@ ArbiScanner/                          ← monorepo root (this repo)
 │   ├── ArbiScanner.TelegramNotifierApp.Domain/
 │   ├── ArbiScanner.TelegramNotifierApp.Abstractions/
 │   ├── ArbiScanner.TelegramNotifierApp.Infrastructure/
+│   └── Dockerfile
+│
+├── ArbiScanner.McpServer/            ← submodule: MCP server (spread-query tools)
+│   ├── ArbiScanner.McpServer.Host/         ← ASP.NET Core 10 MCP host (entry point)
+│   ├── ArbiScanner.McpServer.Domain/
+│   ├── ArbiScanner.McpServer.Abstractions/
+│   ├── ArbiScanner.McpServer.Infrastructure/
+│   └── Dockerfile
+│
+├── ArbiScanner.AiAssistant/          ← submodule: AI chat assistant backend
+│   ├── ArbiScanner.AiAssistant.Api/        ← ASP.NET Core 10 host (ChatHub, entry point)
+│   ├── ArbiScanner.AiAssistant.Domain/
+│   ├── ArbiScanner.AiAssistant.Abstractions/
+│   ├── ArbiScanner.AiAssistant.Infrastructure/
+│   ├── ArbiScanner.AiAssistant.Application/
 │   └── Dockerfile
 │
 └── ArbitrageScanner/                 ← submodule: core scanning engine
@@ -311,6 +350,39 @@ Create a `.env` file in the repository root. The table below lists every variabl
 | `JWT_ISSUER_ADMINPANEL`     | Token issuer claim              |
 | `JWT_AUDIENCE_ADMINPANEL`   | Token audience claim            |
 
+### MCP Server
+
+`ArbiScanner.McpServer` is multi-tenant by pass-through: each user generates
+their own personal, long-lived (30-day) access token from the web app's "MCP
+Access" page (`web`'s `McpTokenService`, a Standard Token Exchange), pastes it
+into their own MCP client, and `mcp-server` — a plain OAuth resource server —
+validates that token and forwards it unchanged to `ArbiScannerWeb.API`. See
+`ArbiScanner.McpServer/README.md` for the full flow. `mcp-server` itself holds
+no Keycloak client secret; only `web`'s `McpTokenService` needs one, to mint
+tokens.
+
+| Variable                     | Description                                                                 |
+|-------------------------------|------------------------------------------------------------------------------|
+| `OIDC_AUTHORITY_MCP`         | Keycloak realm issuer `mcp-server` validates tokens against (`arbiscanner-web` realm) |
+| `OIDC_AUDIENCE_MCP`          | Expected audience claim on incoming tokens — `arbiscanner-mcp`              |
+| `KEYCLOAK_MCP_CLIENT_ID`     | `arbiscanner-mcp` confidential client id — used by `web`'s `McpTokenService` to mint tokens, not by `mcp-server` |
+| `KEYCLOAK_MCP_CLIENT_SECRET` | `arbiscanner-mcp` client secret — same caveat                               |
+| `MCP_WEB_API_URL`            | Base URL of `ArbiScannerWeb.API` the MCP tools call (`http://web:8080`)     |
+
+### AI Assistant
+
+`ArbiScanner.AiAssistant` reuses the same `arbiscanner-web-spa` token the browser
+already holds (`OIDC_AUTHORITY_WEBAPP`/`OIDC_AUDIENCE_WEBAPP`, same variables the
+`web` service itself uses) and calls `web`'s existing `POST /api/McpToken/Generate`
+to obtain an `arbiscanner-mcp`-scoped token for `mcp-server` — no new Keycloak
+client, no new client secret. See `ArbiScanner.AiAssistant/README.md`.
+
+| Variable            | Description                                                        |
+|----------------------|--------------------------------------------------------------------|
+| `OPENROUTER_API_KEY` | OpenRouter API key used for chat inference                         |
+| `OPENROUTER_MODEL`   | OpenRouter model id — pick a free, tool-calling-capable one at deploy time (see [openrouter.ai/models?max_price=0](https://openrouter.ai/models?max_price=0)) |
+| `AI_ASSISTANT_IMAGE_TAG` | Docker image tag override for `ai-assistant`                    |
+
 ### Seed / Default Accounts
 
 | Variable            | Description                                         |
@@ -414,6 +486,32 @@ dotnet run
 
 Ensure `TELEGRAM_BOT_TOKEN` and RabbitMQ / PostgreSQL connection strings are set in `appsettings.Development.json` or as environment variables.
 
+### ArbiScanner.McpServer (.NET 10 ASP.NET Core MCP host)
+
+```bash
+cd ArbiScanner.McpServer/ArbiScanner.McpServer.Host
+dotnet run
+```
+
+Requires a running `web` API and the `arbiscanner-mcp` Keycloak client (see
+`keycloak/README.md` step 9) with `Keycloak`/`WebApi` config in
+`appsettings.Development.json` — see `ArbiScanner.McpServer/README.md` for the
+authentication flow and how to obtain a token (the web app's "MCP Access" page,
+or a manual bootstrap curl for local testing without the UI).
+
+### ArbiScanner.AiAssistant (.NET 10 ASP.NET Core chat host)
+
+```bash
+cd ArbiScanner.AiAssistant/ArbiScanner.AiAssistant.Api
+cp appsettings.template.json appsettings.json
+cp appsettings.Development.template.json appsettings.Development.json
+dotnet run
+```
+
+Requires a running `web` API and `mcp-server`, plus an `OpenRouter:ApiKey`/`Model`
+in `appsettings.Development.json` — see `ArbiScanner.AiAssistant/README.md` for the
+full request flow and how to point it at locally-run dependencies.
+
 ### ArbitrageScanner (.NET 10 Worker)
 
 ```bash
@@ -429,13 +527,15 @@ Requires .NET 10 SDK. Set `MongoDb_ConnectionString` and `RABBITMQ_HOST` in envi
 
 ## Git Submodules
 
-This repository uses four git submodules:
+This repository uses six git submodules:
 
 | Submodule directory              | Remote repository                                           |
 |----------------------------------|-------------------------------------------------------------|
 | `ArbiScannerWebApp`              | https://github.com/dimasdom/ArbiScannerWebApp               |
 | `ArbiScannerAdminPannel`         | https://github.com/dimasdom/ArbiScannerAdminPannel          |
 | `ArbiScanner.TelegramNotifierApp`| https://github.com/dimasdom/ArbiScanner.TelegramNotifierApp |
+| `ArbiScanner.McpServer`          | https://github.com/dimasdom/ArbiSpreadScanner.McpServer     |
+| `ArbiScanner.AiAssistant`        | https://github.com/dimasdom/ArbiSpreadScanner.AiAssistant   |
 | `ArbitrageScanner`               | https://github.com/dimasdom/ArbitrageSpreadScanner                |
 
 ### Common submodule commands
@@ -512,6 +612,7 @@ No separate GHCR secret is needed — pushing just requires "Read and write perm
 | `ArbiScannerWebApp` | ✅ | ✅ | ✅ |
 | `ArbiScannerAdminPannel` | ✅ | ✅ | ✅ |
 | `ArbiScanner.TelegramNotifierApp` | ✅ | ✅ | — |
+| `ArbiScanner.McpServer` | ✅ | ✅ | — |
 
 ---
 
