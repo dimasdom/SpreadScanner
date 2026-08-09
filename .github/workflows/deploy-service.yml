@@ -49,6 +49,11 @@ on:
         required: false
         type: string
         default: "[]"
+      needs_keycloak_realm_export:
+        description: "Whether integration tests need the monorepo's keycloak/realm-export/ dir staged at <self_checkout_path>/keycloak (KeycloakTestFixture walks up from the test assembly looking for it)"
+        required: false
+        type: boolean
+        default: false
       images:
         description: 'JSON array of {"name","dockerfile","context","build_args","needs_root_checkout"} - one entry per image this repo produces'
         required: true
@@ -101,6 +106,25 @@ jobs:
             echo "Cloning $repo into $path"
             git clone --depth 1 "https://github.com/${repo}.git" "$path"
           done
+
+      # KeycloakTestFixture (used by some submodules' *.IntegrationTests) imports the
+      # real production realm export, which lives in the monorepo's keycloak/ dir, not
+      # in the calling repo's own repo - sparse-checkout it and stage it under
+      # <self_checkout_path>/keycloak so FindRealmExportFile() finds it by walking up
+      # from the test assembly's output directory. Mirrors the same workaround each
+      # caller's own ci.yml already applies.
+      - name: Checkout Keycloak realm export from monorepo
+        if: inputs.needs_keycloak_realm_export
+        uses: actions/checkout@v7
+        with:
+          repository: dimasdom/SpreadScanner
+          sparse-checkout: |
+            keycloak/realm-export
+          path: monorepo-keycloak
+
+      - name: Stage Keycloak realm export
+        if: inputs.needs_keycloak_realm_export
+        run: cp -r monorepo-keycloak/keycloak ${{ inputs.self_checkout_path }}/keycloak
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
