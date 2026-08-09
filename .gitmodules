@@ -10,3 +10,9 @@
 [submodule "ArbiScanner.TelegramNotifierApp"]
 	path = ArbiScanner.TelegramNotifierApp
 	url = https://github.com/dimasdom/ArbiSpreadScanner.TelegramNotifierApp.git
+[submodule "ArbiScanner.McpServer"]
+	path = ArbiScanner.McpServer
+	url = https://github.com/dimasdom/ArbiSpreadScanner.McpServer.git
+[submodule "ArbiScanner.AiAssistant"]
+	path = ArbiScanner.AiAssistant
+	url = https://github.com/dimasdom/ArbiScanner.AiAssistant.git

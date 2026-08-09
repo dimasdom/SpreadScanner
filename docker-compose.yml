@@ -22,6 +22,8 @@
 #   8080  - ArbiScannerWebApp .NET API
 #   8081  - ArbiScannerAdminPannel .NET API
 #   8085  - Worker metrics (Prometheus scrape)
+#   8087  - ArbiScanner.McpServer
+#   8088  - ArbiScanner.AiAssistant
 #   9090  - Prometheus
 #
 # The gateway nginx (web-client, port 80/443) also reverse-proxies:
@@ -30,7 +32,18 @@
 #   /grafana/    -> grafana      (GF_SERVER_SERVE_FROM_SUB_PATH=true)
 #   /prometheus/ -> prometheus   (--web.route-prefix=/prometheus/, nginx basic-auth gated —
 #                                  credentials come from PROMETHEUS_BASIC_AUTH_USER/PASSWORD)
+#   /mcp/        -> mcp-server   (Streamable HTTP MCP transport, requires its own
+#                                  arbiscanner-mcp Keycloak bearer token — see
+#                                  ArbiScanner.McpServer/README.md)
+#   /ai-hub/     -> ai-assistant (SignalR chat hub, same arbiscanner-web-spa bearer
+#                                  token as every other ArbiScannerWeb.API call — see
+#                                  ArbiScanner.AiAssistant/README.md)
 #   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
+#
+# Keycloak (OIDC/OAuth2 for ArbiScannerWebApp, see keycloak/README.md) is NOT
+# path-routed — its own /admin/{realm}/console paths collide with the /admin/
+# route above, so it gets a dedicated subdomain (auth.<domain>) with its own
+# nginx server block instead. See keycloak/README.md for one-time setup.
 
 services:
 
@@ -113,6 +126,35 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - arbiscanner
+
+  keycloak:
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-keycloak:${KEYCLOAK_IMAGE_TAG:-latest}
+    container_name: arbiscanner-keycloak
+    restart: unless-stopped
+    # First service in this compose file to get an explicit memory limit — a
+    # JVM app idles well above the lean .NET services here, so cap it rather
+    # than let it auto-size against host memory. Tune empirically.
+    mem_limit: 384m
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: "jdbc:postgresql://postgres:5432/keycloak"
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: "${POSTGRES_PASSWORD}"
+      KC_HOSTNAME: "auth.arbiscannerwebapp.site"
+      KC_PROXY_HEADERS: xforwarded
+      # TLS terminates at the gateway nginx (web-client), not here.
+      KC_HTTP_ENABLED: "true"
+      KEYCLOAK_ADMIN: "${KEYCLOAK_ADMIN_USER}"
+      KEYCLOAK_ADMIN_PASSWORD: "${KEYCLOAK_ADMIN_PASSWORD}"
+      JAVA_OPTS_APPEND: "-Xms64m -Xmx256m"
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - arbiscanner
 
@@ -222,16 +264,23 @@ services:
       MongoDb__SpreadsTickerCollection: "${MONGODB_SPREADS_TICKER_COLLECTION}"
       AdminApiUrl: http://admin-api:8080
       ClientUrl: "${WEB_CLIENT_URL}"
-      # AdminService only calls endpoints gated by [Authorize] (any role), not
-      # [Authorize(Roles = "Administrator")] — a Manager account is sufficient
-      # and keeps the full Administrator credentials out of this service.
-      AdminUser__UserName: "${MANAGER_USERNAME}"
-      AdminUser__Password: "${MANAGER_PASSWORD}"
-      Jwt__SigningKey: "${JWT_SIGNING_KEY_WEBAPP}"
-      Jwt__Issuer: "${JWT_ISSUER_WEBAPP}"
-      Jwt__Audience: "${JWT_AUDIENCE_WEBAPP}"
-      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
-      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      # AdminService authenticates via OAuth2 Client Credentials against the
+      # arbiscanner-admin-service client, whose service account is assigned
+      # only the Manager realm role — [Authorize] (any role) endpoints, not
+      # [Authorize(Roles = "Administrator")] ones. Replaces the old
+      # Manager-username/password login (see keycloak/configure-admin-users.sh).
+      Keycloak__AdminService__Authority: "${OIDC_AUTHORITY_ADMINPANEL}"
+      Keycloak__AdminService__ClientId: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_ID}"
+      Keycloak__AdminService__ClientSecret: "${KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET}"
+      # McpTokenService's Standard Token Exchange grant (arbiscanner-web realm,
+      # arbiscanner-mcp client) — powers the "MCP Access" page's token generation.
+      # ArbiScanner.McpServer itself only validates the tokens this mints, it
+      # doesn't use this client id/secret — see keycloak/README.md step 9.
+      Keycloak__McpExchange__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Keycloak__McpExchange__ClientId: "${KEYCLOAK_MCP_CLIENT_ID}"
+      Keycloak__McpExchange__ClientSecret: "${KEYCLOAK_MCP_CLIENT_SECRET}"
+      Jwt__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Jwt__Audience: "${OIDC_AUDIENCE_WEBAPP}"
       EmailSettings__SmtpServer: "${SMTP_SERVER}"
       EmailSettings__SmtpPort: "${SMTP_PORT}"
       EmailSettings__SenderEmail: "${SENDER_EMAIL}"
@@ -254,6 +303,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      keycloak:
+        condition: service_started
       loki:
         condition: service_started
       tempo:
@@ -269,6 +320,9 @@ services:
       dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
         VITE_API_URL: ""
+        VITE_OIDC_AUTHORITY: "${OIDC_AUTHORITY_WEBAPP}"
+        VITE_OIDC_CLIENT_ID: "arbiscanner-web-spa"
+        VITE_OIDC_REDIRECT_URI: "${WEB_CLIENT_URL}/auth/callback"
     image: ghcr.io/dimasdom/arbiscanner-web-client:${WEB_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-web-client
     restart: unless-stopped
@@ -291,6 +345,7 @@ services:
       - grafana
       - prometheus
       - rabbitmq
+      - keycloak
     networks:
       - arbiscanner
 
@@ -323,16 +378,14 @@ services:
       ConnectionStrings__AdminConnection: "Host=postgres;Port=5432;Database=ArbiScannerAdminPanelDb;Username=postgres;Password=su1234"
       Redis__Endpoint: redis:6379
       Cors__AllowedOrigins: "${ADMIN_CLIENT_URL}"
-      Seed__Enabled: "${SEED_ENABLED}"
-      Seed__AdminUserName: "${ADMIN_USERNAME}"
-      Seed__AdminPassword: "${ADMIN_PASSWORD}"
-      Seed__ManagerUserName: "${MANAGER_USERNAME}"
-      Seed__ManagerPassword: "${MANAGER_PASSWORD}"
-      Jwt__SigningKey: "${JWT_SIGNING_KEY_ADMINPANEL}"
-      Jwt__Issuer: "${JWT_ISSUER_ADMINPANEL}"
-      Jwt__Audience: "${JWT_AUDIENCE_ADMINPANEL}"
-      Jwt__AccessTokenExpirationMinutes: "${JWT_ACCESS_TOKEN_EXPIRATION_MINUTES}"
-      Jwt__RefreshTokenExpirationDays: "${JWT_REFRESH_TOKEN_EXPIRATION_DAYS}"
+      Jwt__Authority: "${OIDC_AUTHORITY_ADMINPANEL}"
+      Jwt__Audience: "${OIDC_AUDIENCE_ADMINPANEL}"
+      # UsersService deletes the Keycloak identity (arbiscanner-web realm) when an
+      # admin deletes a user, so the local shadow-row delete actually frees the
+      # account/email up instead of leaving it stuck (see keycloak/README.md).
+      Keycloak__WebRealmAdmin__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Keycloak__WebRealmAdmin__ClientId: "${KEYCLOAK_WEB_ADMIN_OPS_CLIENT_ID}"
+      Keycloak__WebRealmAdmin__ClientSecret: "${KEYCLOAK_WEB_ADMIN_OPS_CLIENT_SECRET}"
       OxaPay__BaseUrl: "${OXAPAY_BASE_URL}"
       OxaPay__MerchantApiKey: "${OXAPAY_MERCHANT_API_KEY}"
       OxaPay__DefaultCurrency: "${OXAPAY_DEFAULT_CURRENCY}"
@@ -359,6 +412,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      keycloak:
+        condition: service_started
       loki:
         condition: service_started
       tempo:
@@ -372,6 +427,9 @@ services:
       dockerfile: Dockerfile.client
       args:
         VITE_API_URL: "${ADMIN_API_URL}"
+        VITE_OIDC_AUTHORITY: "${VITE_OIDC_AUTHORITY_ADMINPANEL}"
+        VITE_OIDC_CLIENT_ID: "${VITE_OIDC_CLIENT_ID_ADMINPANEL}"
+        VITE_OIDC_REDIRECT_URI: "${VITE_OIDC_REDIRECT_URI_ADMINPANEL}"
     image: ghcr.io/dimasdom/arbiscanner-admin-client:${ADMIN_CLIENT_IMAGE_TAG:-latest}
     container_name: arbiscanner-admin-client
     restart: unless-stopped
@@ -479,6 +537,109 @@ services:
       rabbitmq:
         condition: service_healthy
       mongodb:
+        condition: service_healthy
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  # ── ArbiScanner.McpServer ────────────────────────────────────────────────────
+
+  mcp-server:
+    build:
+      context: ArbiScanner.McpServer
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-mcp-server:${MCP_SERVER_IMAGE_TAG:-latest}
+    container_name: arbiscanner-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8087:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # Plain OAuth resource server — validates whatever long-lived (30-day)
+      # personal access token a caller presents (minted by ArbiScannerWeb's
+      # "MCP Access" page) and forwards it unchanged to ArbiScannerWeb.API.
+      # This container never talks to Keycloak itself, so it needs no client
+      # id/secret of its own. See ArbiScanner.McpServer/README.md.
+      Keycloak__Authority: "${OIDC_AUTHORITY_MCP}"
+      Keycloak__Audience: "${OIDC_AUDIENCE_MCP}"
+      WebApi__BaseUrl: "${MCP_WEB_API_URL}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-mcp
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-mcp"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      web:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
+    networks:
+      - arbiscanner
+
+  # ── ArbiScanner.AiAssistant ──────────────────────────────────────────────────
+
+  ai-assistant:
+    build:
+      context: ArbiScanner.AiAssistant
+      dockerfile: Dockerfile
+    image: ghcr.io/dimasdom/arbiscanner-ai-assistant:${AI_ASSISTANT_IMAGE_TAG:-latest}
+    container_name: arbiscanner-ai-assistant
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # Validates the same arbiscanner-web-spa-audienced token the browser already
+      # holds for every other ArbiScannerWeb.API call — no new Keycloak client.
+      Jwt__Authority: "${OIDC_AUTHORITY_WEBAPP}"
+      Jwt__Audience: "${OIDC_AUDIENCE_WEBAPP}"
+      # Only used to call POST /api/McpToken/Generate, which exchanges the caller's
+      # own token for one scoped to arbiscanner-mcp — see ArbiScanner.AiAssistant/README.md.
+      WebApi__BaseUrl: "${MCP_WEB_API_URL}"
+      McpServer__BaseUrl: "http://mcp-server:8080/mcp"
+      OpenRouter__ApiKey: "${OPENROUTER_API_KEY}"
+      OpenRouter__Model: "${OPENROUTER_MODEL}"
+      Cors__AllowedOrigins__0: "${WEB_CLIENT_URL}"
+      Serilog__WriteTo__1__Name: GrafanaLoki
+      Serilog__WriteTo__1__Args__uri: "${LOKI_URI}"
+      Serilog__WriteTo__1__Args__labels__0__key: app
+      Serilog__WriteTo__1__Args__labels__0__value: arbiscanner-ai-assistant
+      Serilog__WriteTo__1__Args__labels__1__key: env
+      Serilog__WriteTo__1__Args__labels__1__value: production
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "arbiscanner-ai-assistant"
+      Observability__Enabled: "${OBSERVABILITY_ENABLED:-true}"
+      VerboseLogging__Enabled: "${VERBOSE_CONSOLE_LOGS:-false}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      web:
+        condition: service_healthy
+      mcp-server:
         condition: service_healthy
       loki:
         condition: service_started

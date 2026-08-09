@@ -22,3 +22,8 @@ scrape_configs:
     static_configs:
       - targets: ["arbitrage-scanner:8085"]
     metrics_path: /metrics
+
+  - job_name: arbiscanner-mcp
+    static_configs:
+      - targets: ["mcp-server:8080"]
+    metrics_path: /metrics

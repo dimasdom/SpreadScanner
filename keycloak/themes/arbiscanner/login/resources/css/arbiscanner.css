@@ -1,0 +1,326 @@
+/*
+ * Restyles keycloak.v2's PatternFly-based login pages to match the
+ * ArbiScanner app's own pre-Keycloak dark UI (plain card, flat inputs,
+ * borderless outline buttons, indigo text links). Overrides keycloak.v2's
+ * own css/styles.css (loaded first, see theme.properties) rather than
+ * rewriting the PatternFly markup, so upstream structural fixes/accessibility
+ * behavior keep flowing in on Keycloak upgrades.
+ */
+
+:root {
+  --arb-bg: #05070d;
+  --arb-card-bg: #0e1526;
+  --arb-card-border: #232c40;
+  --arb-input-bg: #141c2e;
+  --arb-input-border: #2b3650;
+  --arb-input-border-focus: #4b5b82;
+  --arb-text: #f1f5f9;
+  --arb-text-muted: #94a3b8;
+  --arb-link: #6366f1;
+  --arb-link-hover: #818cf8;
+  --arb-error-bg: #3a1620;
+  --arb-error-border: #7f1d2c;
+  --arb-error-text: #fca5b1;
+  --arb-success-bg: #12301f;
+  --arb-success-border: #1d5c37;
+  --arb-success-text: #86efac;
+  --arb-warning-bg: #3a2c10;
+  --arb-warning-border: #7f5c1d;
+  --arb-warning-text: #fcd34d;
+  --arb-info-bg: #151d38;
+  --arb-info-border: #2c3a6b;
+  --arb-info-text: #a5b4fc;
+}
+
+/* The page is always dark by design (darkMode=false in theme.properties just
+   turns off keycloak.v2's own OS-driven light/dark toggle) — but that also
+   means template.ftl's <meta name="color-scheme"> renders "light" only,
+   telling browsers this page is light-only. On a real OS/browser in dark
+   mode that mismatch makes native, unstyled form-control chrome (autofill
+   backgrounds, caret color, text the author CSS doesn't fully override)
+   fall back to light-on-light or dark-on-dark and disappear. Declaring the
+   actual color-scheme here overrides the meta tag and fixes that at the root
+   instead of chasing individual invisible elements.
+*/
+:root,
+html {
+  color-scheme: dark;
+}
+
+body#keycloak-bg,
+.login-pf body {
+  background: var(--arb-bg) !important;
+  color: var(--arb-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+}
+
+
+/* Hide the default Keycloak brand header — the old UI has no top bar, just
+   the centered card. */
+#kc-header {
+  display: none;
+}
+
+.pf-v5-c-login__container {
+  grid-template-columns: minmax(0, 30rem);
+  grid-template-areas: "main";
+  row-gap: 0;
+  /* Gutter so the card never touches the viewport edge on narrow/mobile
+     screens — grid-template-columns alone shrinks the card to fit but
+     leaves zero margin either side. */
+  box-sizing: border-box;
+  padding-inline: 1.25rem;
+  padding-block: 1.5rem;
+  width: 100%;
+}
+
+@media (max-width: 480px) {
+  .pf-v5-c-login__main {
+    padding: 1.75rem;
+  }
+}
+
+.pf-v5-c-login__main {
+  background: var(--arb-card-bg);
+  border: 1px solid var(--arb-card-border);
+  border-radius: 28px;
+  padding: 2.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  /* Fallback for any text inside the card that isn't covered by one of the
+     specific rules below (e.g. info.ftl's plain <p class="instruction"> on
+     "Your account has been updated" and similar generic messages this theme
+     doesn't override a template for) — PatternFly's own default text color
+     is tuned for a light background and renders near-black, invisible here.
+     Every more specific rule further down (links, alerts, labels,
+     checkboxes) still wins the cascade and keeps its own color. */
+  color: var(--arb-text-muted);
+}
+
+.pf-v5-c-login__main-header {
+  border-top: none;
+  padding: 0 0 1.75rem;
+  text-align: left;
+}
+
+.pf-v5-c-login__main-body {
+  padding: 0;
+}
+
+#kc-page-title,
+.pf-v5-c-title.pf-m-3xl {
+  color: var(--arb-text);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+/* "* Required fields" legend + the per-label required asterisks — the
+   reference design has neither, and the stock legend renders in a dark
+   color meant for a light background (unreadable here). */
+.subtitle,
+.pf-v5-c-form__label-required {
+  display: none;
+}
+
+/* Divider line PatternFly draws above the footer link band. */
+.pf-v5-c-login__main-footer-band {
+  border-block-start: none;
+  padding-block-start: 0;
+}
+
+/* ── Form fields ─────────────────────────────────────────────────────── */
+
+.pf-v5-c-form__group {
+  margin-bottom: 1.4rem;
+}
+
+.pf-v5-c-form__label {
+  padding-bottom: 0.4rem;
+}
+
+.pf-v5-c-form__label-text {
+  color: var(--arb-text-muted);
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
+.pf-v5-c-form__label-required {
+  color: var(--arb-link-hover);
+}
+
+.pf-v5-c-form-control,
+select.pf-v5-c-form-control {
+  background-color: var(--arb-input-bg) !important;
+  border: 1px solid var(--arb-input-border) !important;
+  border-radius: 16px;
+  padding: 0;
+  height: 3rem;
+  box-shadow: none;
+}
+
+/* PatternFly draws its own material-style border via ::before (top/left/
+   right hairline) and ::after (bottom accent, brightens on hover/focus)
+   pseudo-elements, absolutely positioned with inset:0 over the whole
+   control — independent of the border set above, in a light-theme color,
+   and square regardless of the element's own border-radius since
+   pseudo-elements don't inherit it. That's what shows as a stray square
+   white line outside the rounded border above. The element's own border
+   fully replaces this, so both layers are disabled here. */
+.pf-v5-c-form-control::before,
+.pf-v5-c-form-control::after {
+  display: none;
+}
+
+.pf-v5-c-form-control:focus-within {
+  border-color: var(--arb-input-border-focus) !important;
+  box-shadow: 0 0 0 1px var(--arb-input-border-focus);
+}
+
+.pf-v5-c-form-control input,
+.pf-v5-c-form-control input[type="text"],
+.pf-v5-c-form-control input[type="password"] {
+  background: transparent;
+  color: var(--arb-text);
+  height: 100%;
+  width: 100%;
+  padding: 0 0.9rem;
+  font-size: 0.98rem;
+  /* The <input> itself carries its own default browser border/appearance
+     independent of the rounded, bordered .pf-v5-c-form-control span wrapping
+     it — left alone, that native border shows through at the corners since
+     it doesn't share the wrapper's border-radius. The wrapper is the only
+     visible border; the input itself must be borderless. */
+  border: none;
+  border-radius: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* The ring around a focused field is drawn by the wrapping .pf-v5-c-form-control
+   above (via focus-within) — the input's own native focus ring would double
+   it up in a mismatched color, so it's suppressed here specifically. */
+.pf-v5-c-form-control input:focus,
+.pf-v5-c-form-control input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.pf-v5-c-form-control.pf-m-error {
+  border-color: var(--arb-error-border) !important;
+}
+
+/* Password show/hide toggle — the reference design has a plain field with no
+   icon, so this is hidden and the field takes the full width instead. */
+.pf-v5-c-input-group {
+  gap: 0;
+}
+
+.pf-v5-c-input-group__item:has(button[data-password-toggle]) {
+  display: none;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+
+.pf-v5-c-button.pf-m-primary,
+.pf-v5-c-button.pf-m-secondary {
+  background: var(--arb-input-bg);
+  border: 1px solid var(--arb-input-border);
+  border-radius: 16px;
+  color: var(--arb-text);
+  font-weight: 600;
+  font-size: 0.98rem;
+  height: 3.1rem;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.pf-v5-c-button.pf-m-primary:hover,
+.pf-v5-c-button.pf-m-primary:focus,
+.pf-v5-c-button.pf-m-secondary:hover,
+.pf-v5-c-button.pf-m-secondary:focus {
+  background: #1a2338;
+  border-color: var(--arb-input-border-focus);
+}
+
+.pf-v5-c-form__actions {
+  padding-top: 0.5rem;
+}
+
+/* ── Bottom link row (Forgot password / Register / Sign in) ────────────
+   Rendered by our overridden login.ftl / register.ftl / login-reset-password.ftl
+   via a shared <div class="arb-auth-links"> — see those templates. */
+
+.arb-auth-links {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1.75rem;
+  font-size: 0.95rem;
+}
+
+.arb-auth-links a {
+  color: var(--arb-link);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.arb-auth-links a:hover {
+  color: var(--arb-link-hover);
+  text-decoration: underline;
+}
+
+/* Any other in-flow links keycloak.v2 renders (e.g. WebAuthn/OTP flows this
+   theme doesn't override) keep the same indigo accent for consistency. */
+.pf-v5-c-login__main a,
+.pf-v5-c-login__main-footer-band-item a {
+  color: var(--arb-link);
+}
+
+.pf-v5-c-login__main a:hover {
+  color: var(--arb-link-hover);
+}
+
+/* ── Alerts ──────────────────────────────────────────────────────────────
+   template.ftl adds a pf-m-{danger,success,warning,info} modifier based on
+   the real message.type — e.g. the "check your email" confirmation after
+   requesting a password reset is pf-m-success, not an error, and needs to
+   read as reassuring rather than alarming. */
+
+.pf-v5-c-alert {
+  border-radius: 14px;
+  background: var(--arb-info-bg);
+  border: 1px solid var(--arb-info-border);
+  color: var(--arb-info-text);
+}
+
+.pf-v5-c-alert.pf-m-danger {
+  background: var(--arb-error-bg);
+  border-color: var(--arb-error-border);
+  color: var(--arb-error-text);
+}
+
+.pf-v5-c-alert.pf-m-success {
+  background: var(--arb-success-bg);
+  border-color: var(--arb-success-border);
+  color: var(--arb-success-text);
+}
+
+.pf-v5-c-alert.pf-m-warning {
+  background: var(--arb-warning-bg);
+  border-color: var(--arb-warning-border);
+  color: var(--arb-warning-text);
+}
+
+.pf-v5-c-alert .kc-feedback-text {
+  color: inherit;
+}
+
+.pf-v5-c-helper-text__item-text.pf-m-error {
+  color: #fda4af;
+}
+
+/* ── Checkbox (remember me) ──────────────────────────────────────────── */
+
+.pf-v5-c-check__label {
+  color: var(--arb-text-muted);
+}

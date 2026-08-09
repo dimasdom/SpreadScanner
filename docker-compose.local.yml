@@ -1,0 +1,43 @@
+# Local-dev-only override — NOT auto-loaded by `docker compose up` (unlike
+# docker-compose.override.yml, which Compose merges automatically). This repo's
+# docker-compose.yml doubles as the real production deploy command
+# (`docker compose up --build` from the monorepo root, per CLAUDE.md), so an
+# auto-loaded override would silently change production behavior. Opt in
+# explicitly instead:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+#
+# Exposes Keycloak directly on a host port (bypassing nginx/TLS entirely) and
+# points KC_HOSTNAME at that plain-HTTP address, so a locally-run API
+# (`dotnet run`, ASPNETCORE_ENVIRONMENT=Development) can reach it — see the
+# RequireHttpsMetadata = !environment.IsDevelopment() carve-out in both
+# StartupSetup.AddAuthenticationJwt methods. See keycloak/README.md's "Local
+# development" section for the full one-time setup.
+#
+# mcp-server's override points it at that same local Keycloak and at a
+# locally-`dotnet run` ArbiScannerWeb.API (via host.docker.internal), so a
+# local/containerized MCP client can reach http://localhost:8087/mcp directly
+# without nginx/TLS — see ArbiScanner.McpServer/README.md.
+#
+# ai-assistant's override mirrors mcp-server's: local Keycloak, a locally-run
+# WebApi, and (unlike mcp-server) a locally-run McpServer too if you're
+# iterating on both at once — see ArbiScanner.AiAssistant/README.md.
+services:
+  keycloak:
+    ports:
+      - "8082:8080"
+    environment:
+      KC_HOSTNAME: "http://localhost:8082"
+
+  mcp-server:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Keycloak__Authority: "http://localhost:8082/realms/arbiscanner-web"
+      WebApi__BaseUrl: "http://host.docker.internal:5267"
+
+  ai-assistant:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Jwt__Authority: "http://localhost:8082/realms/arbiscanner-web"
+      WebApi__BaseUrl: "http://host.docker.internal:5267"
+      McpServer__BaseUrl: "http://host.docker.internal:8087/mcp"
