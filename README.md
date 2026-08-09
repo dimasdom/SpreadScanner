@@ -332,23 +332,35 @@ Create a `.env` file in the repository root. The table below lists every variabl
 
 > **Observability note:** All four .NET services export OpenTelemetry traces to Grafana Tempo via OTLP gRPC (`http://tempo:4317` in Docker, `http://localhost:4317` for local dev). Metrics are scraped by Prometheus from each service's `/metrics` endpoint (web APIs) or a standalone HTTP listener on port 8085 (worker services). The `OpenTelemetry__Endpoint` environment variable in `docker-compose.yml` overrides the default `appsettings.json` value for each service.
 
-### JWT — User Web App
+### Keycloak / OIDC — User Web App
 
-| Variable                           | Description                              |
-|------------------------------------|------------------------------------------|
-| `JWT_SIGNING_KEY_WEBAPP`           | HMAC signing key (min 32 chars)          |
-| `JWT_ISSUER_WEBAPP`                | Token issuer claim                       |
-| `JWT_AUDIENCE_WEBAPP`              | Token audience claim                     |
-| `JWT_ACCESS_TOKEN_EXPIRATION_MINUTES`  | Access token lifetime in minutes     |
-| `JWT_REFRESH_TOKEN_EXPIRATION_DAYS`    | Refresh token lifetime in days       |
+Auth is validated by `web` against a self-hosted Keycloak (`arbiscanner-web` realm) rather than a self-issued JWT — see `keycloak/README.md`.
 
-### JWT — Admin Panel
+| Variable                | Description                                                              |
+|--------------------------|---------------------------------------------------------------------------|
+| `KEYCLOAK_ADMIN_USER`    | Keycloak bootstrap admin username (realm `master`), shared by both realms |
+| `KEYCLOAK_ADMIN_PASSWORD`| Keycloak bootstrap admin password                                        |
+| `OIDC_AUTHORITY_WEBAPP`  | Keycloak realm issuer `web`'s `AddJwtBearer` validates tokens against    |
+| `OIDC_AUDIENCE_WEBAPP`   | Expected audience claim on incoming tokens — `arbiscanner-web-spa`       |
+| `VITE_OIDC_AUTHORITY`    | Same realm issuer, injected into the React client at build time          |
+| `VITE_OIDC_CLIENT_ID`    | Public SPA client id — `arbiscanner-web-spa`                             |
+| `VITE_OIDC_REDIRECT_URI` | OAuth redirect URI the SPA registers with Keycloak                       |
+| `KEYCLOAK_ADMIN_SERVICE_CLIENT_ID`     | `arbiscanner-admin-service` confidential client id — `web`'s `AdminService` uses this for Client Credentials calls into `admin-api` |
+| `KEYCLOAK_ADMIN_SERVICE_CLIENT_SECRET` | That client's secret                                                     |
+| `KEYCLOAK_WEB_ADMIN_OPS_CLIENT_ID`     | `arbiscanner-web-admin-ops` confidential client id — `admin-api` uses this to delete a user's Keycloak identity |
+| `KEYCLOAK_WEB_ADMIN_OPS_CLIENT_SECRET` | That client's secret                                                     |
 
-| Variable                    | Description                     |
-|-----------------------------|---------------------------------|
-| `JWT_SIGNING_KEY_ADMINPANEL`| HMAC signing key (min 32 chars) |
-| `JWT_ISSUER_ADMINPANEL`     | Token issuer claim              |
-| `JWT_AUDIENCE_ADMINPANEL`   | Token audience claim            |
+### Keycloak / OIDC — Admin Panel
+
+Same pattern, separate realm (`arbiscanner-admin`, staff-only, no self-registration).
+
+| Variable                          | Description                                                        |
+|-------------------------------------|------------------------------------------------------------------------|
+| `OIDC_AUTHORITY_ADMINPANEL`       | Keycloak realm issuer `admin-api`'s `AddJwtBearer` validates tokens against |
+| `OIDC_AUDIENCE_ADMINPANEL`        | Expected audience claim — `arbiscanner-admin-api`                  |
+| `VITE_OIDC_AUTHORITY_ADMINPANEL`  | Same realm issuer, injected into the admin React client             |
+| `VITE_OIDC_CLIENT_ID_ADMINPANEL`  | Public SPA client id — `arbiscanner-admin-spa`                     |
+| `VITE_OIDC_REDIRECT_URI_ADMINPANEL` | OAuth redirect URI the admin SPA registers with Keycloak          |
 
 ### MCP Server
 
@@ -383,15 +395,16 @@ client, no new client secret. See `ArbiScanner.AiAssistant/README.md`.
 | `OPENROUTER_MODEL`   | OpenRouter model id — pick a free, tool-calling-capable one at deploy time (see [openrouter.ai/models?max_price=0](https://openrouter.ai/models?max_price=0)) |
 | `AI_ASSISTANT_IMAGE_TAG` | Docker image tag override for `ai-assistant`                    |
 
-### Seed / Default Accounts
+### Keycloak Staff Accounts
+
+Provisions the initial `arbiscanner-admin` realm staff accounts via `keycloak/configure-admin-users.sh` (one-time, not app-level DB seeding — see `keycloak/README.md` step 7).
 
 | Variable            | Description                                         |
 |---------------------|-----------------------------------------------------|
-| `SEED_ENABLED`      | Enable DB seeding on first run (`true` / `false`)   |
-| `ADMIN_USERNAME`    | Seeded admin account username                       |
-| `ADMIN_PASSWORD`    | Seeded admin account password                       |
-| `MANAGER_USERNAME`  | Seeded manager account username                     |
-| `MANAGER_PASSWORD`  | Seeded manager account password                     |
+| `ADMIN_USERNAME`    | Initial Administrator account username              |
+| `ADMIN_PASSWORD`    | Initial Administrator account password (temporary, forced reset on first login) |
+| `MANAGER_USERNAME`  | Initial Manager account username                    |
+| `MANAGER_PASSWORD`  | Initial Manager account password (temporary, forced reset on first login) |
 
 ### Email (SMTP)
 
