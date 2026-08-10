@@ -19,5 +19,10 @@ COPY realm-export/arbiscanner-web-realm.json /opt/keycloak/data/import/arbiscann
 COPY realm-export/arbiscanner-admin-realm.json /opt/keycloak/data/import/arbiscanner-admin-realm.json
 COPY themes/arbiscanner /opt/keycloak/themes/arbiscanner
 
+# quay.io/keycloak/keycloak already runs as this non-root uid by default (it's
+# inherited from the base image), but Sonar (docker:S6471) can't see that
+# without a static USER instruction here — make it explicit.
+USER 1000
+
 ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
 CMD ["start", "--optimized", "--import-realm"]
