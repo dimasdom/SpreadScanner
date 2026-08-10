@@ -1,0 +1,213 @@
+name: Release service (reusable)
+
+# Shared by each submodule's own .github/workflows/release.yml. Runs once per
+# release-please-created version tag: a lightweight test safety net (plain
+# dotnet/npm test, no SonarCloud - the quality gate already ran via that repo's
+# ci.yml when the release-PR merge landed on main/master, and re-running Sonar
+# against a detached tag ref would misreport branch context), then builds and
+# pushes the version-tagged Docker image(s) to GHCR. Deploying that version is a
+# separate, later step - see deploy-service.yml.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'The release tag to build, e.g. "v1.4.0" (also used as the ref to check out)'
+        required: true
+        type: string
+      self_checkout_path:
+        description: "Directory name to check the calling repo out into (matches its name in the monorepo layout, e.g. ArbiScannerWebApp)"
+        required: true
+        type: string
+      solution_file:
+        description: "Relative to self_checkout_path, e.g. ArbiScannerWebApp.sln"
+        required: true
+        type: string
+      unit_test_project:
+        description: "Relative to self_checkout_path"
+        required: true
+        type: string
+      integration_test_project:
+        description: "Relative to self_checkout_path; empty string skips this step"
+        required: false
+        type: string
+        default: ""
+      has_client_tests:
+        required: false
+        type: boolean
+        default: false
+      client_dir:
+        description: "Relative to workspace root (i.e. already includes self_checkout_path), e.g. ArbiScannerWebApp/ArbiScannerWeb.Client"
+        required: false
+        type: string
+        default: ""
+      sibling_repos:
+        description: 'JSON array of {"repo":"owner/name","path":"dir"} - sibling submodule repos this project references and needs checked out, for both dotnet build and Docker build'
+        required: false
+        type: string
+        default: "[]"
+      needs_keycloak_realm_export:
+        description: "Whether integration tests need the monorepo's keycloak/realm-export/ dir staged at <self_checkout_path>/keycloak (KeycloakTestFixture walks up from the test assembly looking for it)"
+        required: false
+        type: boolean
+        default: false
+      images:
+        description: 'JSON array of {"name","dockerfile","context","build_args","needs_root_checkout"} - one entry per image this repo produces'
+        required: true
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version }}
+          path: ${{ inputs.self_checkout_path }}
+
+      - name: Checkout sibling repos
+        if: inputs.sibling_repos != '[]'
+        run: |
+          echo '${{ inputs.sibling_repos }}' | jq -c '.[]' | while read -r item; do
+            repo=$(echo "$item" | jq -r '.repo')
+            path=$(echo "$item" | jq -r '.path')
+            echo "Cloning $repo into $path"
+            git clone --depth 1 "https://github.com/${repo}.git" "$path"
+          done
+
+      # See deploy-service.yml's (former) equivalent step / CLAUDE.md for why this
+      # monorepo dir needs staging for KeycloakTestFixture-based integration tests.
+      - name: Checkout Keycloak realm export from monorepo
+        if: inputs.needs_keycloak_realm_export
+        uses: actions/checkout@v7
+        with:
+          repository: dimasdom/SpreadScanner
+          sparse-checkout: |
+            keycloak/realm-export
+          path: monorepo-keycloak
+
+      - name: Stage Keycloak realm export
+        if: inputs.needs_keycloak_realm_export
+        run: cp -r monorepo-keycloak/keycloak ${{ inputs.self_checkout_path }}/keycloak
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Setup Node
+        if: inputs.has_client_tests
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+          cache-dependency-path: ${{ inputs.client_dir }}/package-lock.json
+
+      - name: Install client dependencies
+        if: inputs.has_client_tests
+        working-directory: ${{ inputs.client_dir }}
+        run: npm ci --ignore-scripts
+
+      - name: Client tests
+        if: inputs.has_client_tests
+        working-directory: ${{ inputs.client_dir }}
+        run: npm test
+
+      - name: Restore
+        working-directory: ${{ inputs.self_checkout_path }}
+        run: dotnet restore ${{ inputs.solution_file }}
+
+      - name: Build
+        working-directory: ${{ inputs.self_checkout_path }}
+        run: dotnet build ${{ inputs.solution_file }} --no-restore --configuration Release
+
+      - name: Unit tests
+        working-directory: ${{ inputs.self_checkout_path }}
+        run: >
+          dotnet test ${{ inputs.unit_test_project }}
+          --no-restore --configuration Release
+          --logger "trx;LogFileName=unit-tests.trx"
+          --results-directory ./TestResults
+
+      - name: Integration tests
+        if: inputs.integration_test_project != ''
+        working-directory: ${{ inputs.self_checkout_path }}
+        run: >
+          dotnet test ${{ inputs.integration_test_project }}
+          --no-restore --configuration Release
+          --logger "trx;LogFileName=integration-tests.trx"
+          --results-directory ./TestResults
+
+      - name: Publish test results
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
+        if: always()
+        with:
+          name: Test Results
+          working-directory: ${{ inputs.self_checkout_path }}
+          path: "TestResults/*.trx"
+          reporter: dotnet-trx
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: ${{ fromJson(inputs.images) }}
+    steps:
+      # Only the images that need repo-root files (currently: WebApp's client,
+      # for nginx/) fetch the root repo, sparse-checked-out to just that folder -
+      # this sidesteps the root repo's own submodule gitlinks entirely.
+      - name: Checkout root repo (nginx/, needed by some Docker build contexts)
+        if: matrix.image.needs_root_checkout
+        uses: actions/checkout@v7
+        with:
+          repository: dimasdom/SpreadScanner
+          sparse-checkout: |
+            nginx
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version }}
+          path: ${{ inputs.self_checkout_path }}
+
+      - name: Checkout sibling repos
+        if: inputs.sibling_repos != '[]'
+        run: |
+          echo '${{ inputs.sibling_repos }}' | jq -c '.[]' | while read -r item; do
+            repo=$(echo "$item" | jq -r '.repo')
+            path=$(echo "$item" | jq -r '.path')
+            echo "Cloning $repo into $path"
+            git clone --depth 1 "https://github.com/${repo}.git" "$path"
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # No PAT needed: each caller repo only ever pushes the package(s) it owns,
+      # so that repo's own GITHUB_TOKEN is sufficient (requires "Read and write
+      # permissions" under this repo's Settings -> Actions -> General).
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/dimasdom/${{ matrix.image.name }}:${{ inputs.version }}
+            ghcr.io/dimasdom/${{ matrix.image.name }}:latest
+          build-args: ${{ matrix.image.build_args }}

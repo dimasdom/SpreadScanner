@@ -1,61 +1,19 @@
 name: Deploy service (reusable)
 
 # Shared by each submodule's own .github/workflows/deploy.yml (workflow_dispatch
-# callers, one per repo: ArbitrageScanner, ArbiScannerWebApp, ArbiScannerAdminPannel,
-# ArbiScanner.TelegramNotifierApp). Runs tests, enforces the SonarCloud quality gate,
-# builds/pushes Docker image(s) to GHCR, then SSHes into the VPS to pull + restart
-# the affected compose service(s). See CLAUDE.md for the cross-submodule reference
-# rules that shape which sibling repos each caller needs checked out.
+# callers, one per repo). Pure "ship a version" step: pulls the already-built,
+# already-tested image(s) for the given version tag from GHCR and restarts the
+# affected compose service(s) on the VPS via scripts/deploy-remote.sh. Does NOT
+# checkout code, run tests, or build images - that happens once per release, in
+# release-service.yml, triggered by release-please tagging a new version. This
+# split means "deploy" always ships an exact, previously-verified artifact and
+# can target any version (or "latest") without re-running the pipeline.
 
 on:
   workflow_call:
     inputs:
-      self_checkout_path:
-        description: "Directory name to check the calling repo out into (matches its name in the monorepo layout, e.g. ArbiScannerWebApp)"
-        required: true
-        type: string
-      sonar_project_key:
-        required: true
-        type: string
-      solution_file:
-        description: "Relative to self_checkout_path, e.g. ArbiScannerWebApp.sln"
-        required: true
-        type: string
-      unit_test_project:
-        description: "Relative to self_checkout_path"
-        required: true
-        type: string
-      integration_test_project:
-        description: "Relative to self_checkout_path; empty string skips this step"
-        required: false
-        type: string
-        default: ""
-      has_client_tests:
-        required: false
-        type: boolean
-        default: false
-      client_dir:
-        description: "Relative to workspace root (i.e. already includes self_checkout_path), e.g. ArbiScannerWebApp/ArbiScannerWeb.Client"
-        required: false
-        type: string
-        default: ""
-      sonar_begin_extra_args:
-        description: "Opaque passthrough appended to 'dotnet-sonarscanner begin' (exclusions, lcov paths, projectBaseDir, etc. - differs too much per repo to model as discrete inputs)"
-        required: false
-        type: string
-        default: ""
-      sibling_repos:
-        description: 'JSON array of {"repo":"owner/name","path":"dir"} - sibling submodule repos this project references and needs checked out, for both dotnet build and Docker build'
-        required: false
-        type: string
-        default: "[]"
-      needs_keycloak_realm_export:
-        description: "Whether integration tests need the monorepo's keycloak/realm-export/ dir staged at <self_checkout_path>/keycloak (KeycloakTestFixture walks up from the test assembly looking for it)"
-        required: false
-        type: boolean
-        default: false
-      images:
-        description: 'JSON array of {"name","dockerfile","context","build_args","needs_root_checkout"} - one entry per image this repo produces'
+      version:
+        description: 'Image tag to deploy, e.g. "v1.4.0" or "latest"'
         required: true
         type: string
       deploy_services:
@@ -67,13 +25,11 @@ on:
         required: true
         type: string
       dry_run:
-        description: "When true, run test + build + push but skip the deploy job entirely"
+        description: "When true, resolve inputs but skip the VPS deploy step entirely"
         required: false
         type: boolean
         default: false
     secrets:
-      SONAR_TOKEN:
-        required: true
       VPS_HOST:
         required: true
       VPS_USER:
@@ -86,232 +42,7 @@ on:
         required: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          path: ${{ inputs.self_checkout_path }}
-          fetch-depth: 0
-
-      - name: Checkout sibling repos
-        if: inputs.sibling_repos != '[]'
-        run: |
-          echo '${{ inputs.sibling_repos }}' | jq -c '.[]' | while read -r item; do
-            repo=$(echo "$item" | jq -r '.repo')
-            path=$(echo "$item" | jq -r '.path')
-            echo "Cloning $repo into $path"
-            git clone --depth 1 "https://github.com/${repo}.git" "$path"
-          done
-
-      # KeycloakTestFixture (used by some submodules' *.IntegrationTests) imports the
-      # real production realm export, which lives in the monorepo's keycloak/ dir, not
-      # in the calling repo's own repo - sparse-checkout it and stage it under
-      # <self_checkout_path>/keycloak so FindRealmExportFile() finds it by walking up
-      # from the test assembly's output directory. Mirrors the same workaround each
-      # caller's own ci.yml already applies.
-      - name: Checkout Keycloak realm export from monorepo
-        if: inputs.needs_keycloak_realm_export
-        uses: actions/checkout@v7
-        with:
-          repository: dimasdom/SpreadScanner
-          sparse-checkout: |
-            keycloak/realm-export
-          path: monorepo-keycloak
-
-      - name: Stage Keycloak realm export
-        if: inputs.needs_keycloak_realm_export
-        run: cp -r monorepo-keycloak/keycloak ${{ inputs.self_checkout_path }}/keycloak
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: "10.0.x"
-
-      # SonarCloud is free for public repos; requires a SONAR_TOKEN secret from the
-      # project's SonarCloud org, and /k /o below to match the imported project.
-      - name: Set up JDK for SonarCloud
-        uses: actions/setup-java@v5
-        with:
-          distribution: "zulu"
-          java-version: "17"
-
-      - name: Cache SonarCloud packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-
-      - name: Install SonarCloud scanner
-        working-directory: ${{ inputs.self_checkout_path }}
-        run: |
-          dotnet tool install --global dotnet-sonarscanner
-          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
-
-      - name: Begin SonarCloud analysis
-        working-directory: ${{ inputs.self_checkout_path }}
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: >
-          dotnet-sonarscanner begin
-          /k:"${{ inputs.sonar_project_key }}"
-          /o:"dimasdom"
-          /d:sonar.token="$SONAR_TOKEN"
-          /d:sonar.host.url="https://sonarcloud.io"
-          /d:sonar.cs.vstest.reportsPaths="TestResults/*.trx"
-          /d:sonar.cs.opencover.reportsPaths="TestResults/**/coverage.opencover.xml"
-          /d:sonar.qualitygate.wait=true
-          /d:sonar.qualitygate.timeout=300
-          ${{ inputs.sonar_begin_extra_args }}
-
-      - name: Setup Node
-        if: inputs.has_client_tests
-        uses: actions/setup-node@v7
-        with:
-          node-version: "lts/*"
-          cache: "npm"
-          cache-dependency-path: ${{ inputs.client_dir }}/package-lock.json
-
-      - name: Install client dependencies
-        if: inputs.has_client_tests
-        working-directory: ${{ inputs.client_dir }}
-        run: npm ci --ignore-scripts
-
-      - name: Client tests
-        if: inputs.has_client_tests
-        working-directory: ${{ inputs.client_dir }}
-        run: npm test -- --coverage --reporter=junit --outputFile=./TestResults/junit.xml
-
-      # vitest writes SF: paths relative to the client dir; the .NET scanner resolves
-      # relative report paths inconsistently, so rewrite them to absolute.
-      - name: Rewrite lcov source paths to absolute for SonarCloud
-        if: inputs.has_client_tests
-        working-directory: ${{ inputs.client_dir }}
-        run: |
-          sed -i "s|^SF:|SF:${{ github.workspace }}/${{ inputs.client_dir }}/|" coverage/lcov.info
-          echo "lcov SF: entries: $(grep -c '^SF:' coverage/lcov.info)"
-
-      - name: Restore
-        working-directory: ${{ inputs.self_checkout_path }}
-        run: dotnet restore ${{ inputs.solution_file }}
-
-      - name: Build (with analyzers)
-        working-directory: ${{ inputs.self_checkout_path }}
-        run: dotnet build ${{ inputs.solution_file }} --no-restore --configuration Release
-
-      - name: Unit tests
-        working-directory: ${{ inputs.self_checkout_path }}
-        run: >
-          dotnet test ${{ inputs.unit_test_project }}
-          --no-restore --configuration Release
-          --logger "trx;LogFileName=unit-tests.trx"
-          --results-directory ./TestResults
-          --collect:"XPlat Code Coverage;Format=opencover"
-
-      - name: Integration tests
-        if: inputs.integration_test_project != ''
-        working-directory: ${{ inputs.self_checkout_path }}
-        run: >
-          dotnet test ${{ inputs.integration_test_project }}
-          --no-restore --configuration Release
-          --logger "trx;LogFileName=integration-tests.trx"
-          --results-directory ./TestResults
-          --collect:"XPlat Code Coverage;Format=opencover"
-
-      # sonar.qualitygate.wait=true (set on the begin step above) makes this step
-      # (and therefore the whole job) fail closed on a red quality gate - this is
-      # what blocks build-and-push below.
-      - name: End SonarCloud analysis (enforces quality gate)
-        working-directory: ${{ inputs.self_checkout_path }}
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: dotnet-sonarscanner end /d:sonar.token="$SONAR_TOKEN"
-
-      - name: Publish test results
-        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
-        if: always()
-        with:
-          name: Test Results
-          working-directory: ${{ inputs.self_checkout_path }}
-          path: "TestResults/*.trx"
-          reporter: dotnet-trx
-
-      - name: Publish client test results
-        if: always() && inputs.has_client_tests
-        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3
-        with:
-          name: Client Test Results
-          working-directory: ${{ inputs.client_dir }}
-          path: "TestResults/junit.xml"
-          reporter: java-junit
-
-  build-and-push:
-    needs: test
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      matrix:
-        image: ${{ fromJson(inputs.images) }}
-    steps:
-      # Only the images that need repo-root files (currently: WebApp's client,
-      # for nginx/) fetch the root repo, sparse-checked-out to just that folder -
-      # this sidesteps the root repo's own submodule gitlinks entirely.
-      - name: Checkout root repo (nginx/, needed by some Docker build contexts)
-        if: matrix.image.needs_root_checkout
-        uses: actions/checkout@v7
-        with:
-          repository: dimasdom/SpreadScanner
-          sparse-checkout: |
-            nginx
-          sparse-checkout-cone-mode: false
-
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          path: ${{ inputs.self_checkout_path }}
-
-      - name: Checkout sibling repos
-        if: inputs.sibling_repos != '[]'
-        run: |
-          echo '${{ inputs.sibling_repos }}' | jq -c '.[]' | while read -r item; do
-            repo=$(echo "$item" | jq -r '.repo')
-            path=$(echo "$item" | jq -r '.path')
-            echo "Cloning $repo into $path"
-            git clone --depth 1 "https://github.com/${repo}.git" "$path"
-          done
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # No PAT needed: each caller repo only ever pushes the package(s) it owns,
-      # so that repo's own GITHUB_TOKEN is sufficient (requires "Read and write
-      # permissions" under this repo's Settings -> Actions -> General).
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.image.context }}
-          file: ${{ matrix.image.dockerfile }}
-          push: true
-          tags: |
-            ghcr.io/dimasdom/${{ matrix.image.name }}:latest
-            ghcr.io/dimasdom/${{ matrix.image.name }}:sha-${{ github.sha }}
-          build-args: ${{ matrix.image.build_args }}
-
   deploy:
-    needs: build-and-push
     if: inputs.dry_run == false
     runs-on: ubuntu-latest
     steps:
@@ -336,7 +67,7 @@ jobs:
             set -euo pipefail
             cd "${{ secrets.VPS_DEPLOY_PATH }}"
             git pull --ff-only
-            TAG="sha-${{ github.sha }}"
+            TAG="${{ inputs.version }}"
             for pair in ${{ steps.resolve_tags.outputs.pairs }}; do
               svc="${pair%%:*}"
               var_name="${pair##*:}"
