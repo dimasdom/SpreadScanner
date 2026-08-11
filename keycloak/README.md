@@ -43,14 +43,29 @@ and `arbiscanner-admin`, imported automatically from
    (`arbiscanner-admin` only needs SMTP for password-reset emails — it has no
    self-registration/verify-email flow, unlike `arbiscanner-web`.)
 
-6. **EULA copy** (`arbiscanner-web` only): the "Terms and Conditions" required
+6. **Google sign-in** (`arbiscanner-web` only, optional): register an OAuth
+   client in Google Cloud Console (Credentials → Create OAuth client ID →
+   Web application) with Authorized redirect URI
+   `https://auth.arbiscannerwebapp.site/realms/arbiscanner-web/broker/google/endpoint`,
+   then publish its OAuth consent screen out of "Testing" status (otherwise
+   only whitelisted test users can complete Google login). Put the resulting
+   client ID/secret into `KEYCLOAK_GOOGLE_CLIENT_ID`/`KEYCLOAK_GOOGLE_CLIENT_SECRET`
+   in `.env`, then:
+   ```bash
+   set -a && source .env && set +a && ./keycloak/configure-google-idp.sh
+   ```
+   Idempotent — safe to re-run to rotate the secret later. See the script's
+   header comment for why this isn't just a `realm-export/*.json` edit (same
+   "already-deployed realm" caveat as the `arbiscanner-mcp` client below).
+
+7. **EULA copy** (`arbiscanner-web` only): the "Terms and Conditions" required
    action needs real text — set it via the admin console (Realm settings →
    Localization → add a `termsText` message override) or `kcadm.sh` once real
    EULA content exists. Placeholder text ships until this is done.
    `arbiscanner-admin` has no self-registration and no equivalent required
    action.
 
-7. **`arbiscanner-admin` staff accounts**: this realm ships with
+8. **`arbiscanner-admin` staff accounts**: this realm ships with
    `registrationAllowed: false` and no users — provision the initial
    `Administrator`/`Manager` accounts and the `arbiscanner-admin-service`
    client's service-account role from this repo's existing
@@ -66,7 +81,7 @@ and `arbiscanner-admin`, imported automatically from
    `ArbiScannerWebApp`'s `web` service — that's the Client Credentials secret
    its `AdminService` uses to call `ArbiScannerAdminPannel`'s API.
 
-8. **`arbiscanner-web-admin-ops` secret**: same pattern, other direction —
+9. **`arbiscanner-web-admin-ops` secret**: same pattern, other direction —
    `arbiscanner-web` realm's `arbiscanner-web-admin-ops` client (Keycloak
    admin console → Clients → `arbiscanner-web-admin-ops` → Credentials) into
    `KEYCLOAK_WEB_ADMIN_OPS_CLIENT_SECRET` for `admin-api`. This is what lets
@@ -74,7 +89,7 @@ and `arbiscanner-admin`, imported automatically from
    identity, not just the local shadow row (see the `manage-users` note
    below).
 
-9. **`arbiscanner-mcp` client + Standard Token Exchange, on an already-deployed
+10. **`arbiscanner-mcp` client + Standard Token Exchange, on an already-deployed
    realm only**: fresh/local Keycloak instances pick all of this up
    automatically via `--import-realm` on first boot (see the caveat right
    below — that only applies the first time a realm is created). On a VPS
@@ -248,6 +263,14 @@ is what makes `AddAuthenticationJwt`'s `RequireHttpsMetadata =
    curl http://localhost:8082/realms/arbiscanner-web/.well-known/openid-configuration
    curl http://localhost:8082/realms/arbiscanner-admin/.well-known/openid-configuration
    ```
+   **Optional — Google sign-in locally**: add
+   `http://localhost:8082/realms/arbiscanner-web/broker/google/endpoint` as a
+   second Authorized redirect URI on the same Google Cloud OAuth client (see
+   step 6 of the one-time setup above), then run
+   `set -a && source .env && set +a && ./keycloak/configure-google-idp.sh`
+   here too — Keycloak's identity providers are stored per realm in Postgres,
+   so local and VPS need the script run independently even with the same
+   Google credentials.
 5. **Apply EF migrations**, then run each API and client normally:
    ```bash
    cd ArbiScannerWebApp/ArbiScannerWeb.API && dotnet ef database update
