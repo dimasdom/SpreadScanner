@@ -32,6 +32,9 @@ cd "$REPO_ROOT"
 : "${KEYCLOAK_ADMIN_USER:?KEYCLOAK_ADMIN_USER is not set — set -a && source .env && set +a first}"
 : "${KEYCLOAK_ADMIN_PASSWORD:?KEYCLOAK_ADMIN_PASSWORD is not set — set -a && source .env && set +a first}"
 
+KC_CONTAINER="arbiscanner-keycloak"
+KCADM="/opt/keycloak/bin/kcadm.sh"
+
 echo "==> Building keycloak image"
 docker compose build keycloak
 
@@ -39,13 +42,24 @@ echo "==> Recreating keycloak container"
 docker compose up -d keycloak
 
 echo "==> Waiting for Keycloak to come up"
-timeout=120
+# quay.io/keycloak/keycloak is a minimal UBI image with no curl/wget, so the
+# probe has to be a tool guaranteed to exist in the container — kcadm.sh,
+# Keycloak's own bundled admin CLI, which apply-realm-updates.sh (and every
+# other script in this directory) already depends on. A previous curl-based
+# version of this loop always failed with "executable file not found" and
+# just silently ran out the clock, since its `>/dev/null 2>&1` redirect hid
+# that error — logging in as the real admin user against the real port is
+# also a more meaningful readiness signal than an anonymous GET would be:
+# it proves the exact thing apply-realm-updates.sh needs next (a working
+# admin login), not just that some HTTP port happens to answer.
+timeout=180
 waited=0
-until docker exec arbiscanner-keycloak \
-  curl -sf http://localhost:8080/realms/arbiscanner-web/.well-known/openid-configuration >/dev/null 2>&1
+until docker exec "$KC_CONTAINER" "$KCADM" config credentials \
+  --server http://localhost:8080 --realm master \
+  --user "$KEYCLOAK_ADMIN_USER" --password "$KEYCLOAK_ADMIN_PASSWORD" >/dev/null 2>&1
 do
   if [ "$waited" -ge "$timeout" ]; then
-    echo "Keycloak did not come up within ${timeout}s — check 'docker logs arbiscanner-keycloak'." >&2
+    echo "Keycloak did not come up within ${timeout}s — check 'docker logs $KC_CONTAINER'." >&2
     exit 1
   fi
   sleep 3
