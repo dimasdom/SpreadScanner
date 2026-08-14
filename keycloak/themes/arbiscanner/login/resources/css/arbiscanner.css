@@ -1,50 +1,74 @@
 /*
  * Restyles keycloak.v2's PatternFly-based login pages to match the
- * ArbiScanner app's own pre-Keycloak dark UI (plain card, flat inputs,
- * borderless outline buttons, indigo text links). Overrides keycloak.v2's
- * own css/styles.css (loaded first, see theme.properties) rather than
- * rewriting the PatternFly markup, so upstream structural fixes/accessibility
- * behavior keep flowing in on Keycloak upgrades.
+ * ArbiScanner app's own pre-Keycloak UI (plain card, flat inputs, borderless
+ * outline buttons, indigo text links). Overrides keycloak.v2's own
+ * css/styles.css (loaded first, see theme.properties) rather than rewriting
+ * the PatternFly markup, so upstream structural fixes/accessibility behavior
+ * keep flowing in on Keycloak upgrades.
+ *
+ * Follows the visitor's OS/browser color-scheme preference, same default the
+ * pre-Keycloak app's own ThemeContext uses (light unless the OS prefers
+ * dark) — this page can't read that app's localStorage override since it's a
+ * different origin, so prefers-color-scheme is the only signal available
+ * here. theme.properties sets darkMode=true so template.ftl's
+ * <meta name="color-scheme"> advertises "light dark" to match what's
+ * actually rendered below, instead of lying that the page is light-only.
  */
 
 :root {
-  --arb-bg: #05070d;
-  --arb-card-bg: #0e1526;
-  --arb-card-border: #232c40;
-  --arb-input-bg: #141c2e;
-  --arb-input-border: #2b3650;
-  --arb-input-border-focus: #4b5b82;
-  --arb-text: #f1f5f9;
-  --arb-text-muted: #94a3b8;
-  --arb-link: #6366f1;
-  --arb-link-hover: #818cf8;
-  --arb-error-bg: #3a1620;
-  --arb-error-border: #7f1d2c;
-  --arb-error-text: #fca5b1;
-  --arb-success-bg: #12301f;
-  --arb-success-border: #1d5c37;
-  --arb-success-text: #86efac;
-  --arb-warning-bg: #3a2c10;
-  --arb-warning-border: #7f5c1d;
-  --arb-warning-text: #fcd34d;
-  --arb-info-bg: #151d38;
-  --arb-info-border: #2c3a6b;
-  --arb-info-text: #a5b4fc;
+  --arb-bg: #f8fafc;
+  --arb-card-bg: #ffffff;
+  --arb-card-border: #e2e8f0;
+  --arb-input-bg: #f1f5f9;
+  --arb-input-border: #cbd5e1;
+  --arb-input-border-focus: #6366f1;
+  --arb-button-hover-bg: #e2e8f0;
+  --arb-text: #0f172a;
+  --arb-text-muted: #64748b;
+  --arb-link: #4f46e5;
+  --arb-link-hover: #4338ca;
+  --arb-error-bg: #fef2f2;
+  --arb-error-border: #fecaca;
+  --arb-error-text: #b91c1c;
+  --arb-success-bg: #f0fdf4;
+  --arb-success-border: #bbf7d0;
+  --arb-success-text: #15803d;
+  --arb-warning-bg: #fffbeb;
+  --arb-warning-border: #fde68a;
+  --arb-warning-text: #b45309;
+  --arb-info-bg: #eef2ff;
+  --arb-info-border: #c7d2fe;
+  --arb-info-text: #4338ca;
+  color-scheme: light;
 }
 
-/* The page is always dark by design (darkMode=false in theme.properties just
-   turns off keycloak.v2's own OS-driven light/dark toggle) — but that also
-   means template.ftl's <meta name="color-scheme"> renders "light" only,
-   telling browsers this page is light-only. On a real OS/browser in dark
-   mode that mismatch makes native, unstyled form-control chrome (autofill
-   backgrounds, caret color, text the author CSS doesn't fully override)
-   fall back to light-on-light or dark-on-dark and disappear. Declaring the
-   actual color-scheme here overrides the meta tag and fixes that at the root
-   instead of chasing individual invisible elements.
-*/
-:root,
-html {
-  color-scheme: dark;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --arb-bg: #05070d;
+    --arb-card-bg: #0e1526;
+    --arb-card-border: #232c40;
+    --arb-input-bg: #141c2e;
+    --arb-input-border: #2b3650;
+    --arb-input-border-focus: #4b5b82;
+    --arb-button-hover-bg: #1a2338;
+    --arb-text: #f1f5f9;
+    --arb-text-muted: #94a3b8;
+    --arb-link: #6366f1;
+    --arb-link-hover: #818cf8;
+    --arb-error-bg: #3a1620;
+    --arb-error-border: #7f1d2c;
+    --arb-error-text: #fca5b1;
+    --arb-success-bg: #12301f;
+    --arb-success-border: #1d5c37;
+    --arb-success-text: #86efac;
+    --arb-warning-bg: #3a2c10;
+    --arb-warning-border: #7f5c1d;
+    --arb-warning-text: #fcd34d;
+    --arb-info-bg: #151d38;
+    --arb-info-border: #2c3a6b;
+    --arb-info-text: #a5b4fc;
+    color-scheme: dark;
+  }
 }
 
 body#keycloak-bg,
@@ -222,6 +246,20 @@ select.pf-v5-c-form-control {
 
 /* ── Buttons ─────────────────────────────────────────────────────────── */
 
+/* Every PatternFly button draws its border via an absolutely positioned
+   ::after pseudo-element (color driven by a --pf-v5-c-button--after-
+   BorderColor custom property) rather than the element's own border — the
+   same pattern already handled for .pf-v5-c-form-control above. For
+   .pf-m-secondary (the Google/social sign-in button, see
+   social-providers.ftl) that variable defaults to PatternFly's own
+   primary-blue, which is what shows as a mismatched blue outline around the
+   Google button that the .pf-m-primary Login button doesn't get. The border
+   set below is the only one this theme wants, so the pseudo-element is
+   disabled for every button variant. */
+.pf-v5-c-button::after {
+  display: none;
+}
+
 .pf-v5-c-button.pf-m-primary,
 .pf-v5-c-button.pf-m-secondary {
   background: var(--arb-input-bg);
@@ -238,7 +276,7 @@ select.pf-v5-c-form-control {
 .pf-v5-c-button.pf-m-primary:focus,
 .pf-v5-c-button.pf-m-secondary:hover,
 .pf-v5-c-button.pf-m-secondary:focus {
-  background: #1a2338;
+  background: var(--arb-button-hover-bg);
   border-color: var(--arb-input-border-focus);
 }
 
@@ -316,7 +354,7 @@ select.pf-v5-c-form-control {
 }
 
 .pf-v5-c-helper-text__item-text.pf-m-error {
-  color: #fda4af;
+  color: var(--arb-error-text);
 }
 
 /* ── Checkbox (remember me) ──────────────────────────────────────────── */
