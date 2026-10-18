@@ -27,3 +27,29 @@ jobs:
 
       - name: Build telegram-notifier image (repo-root context)
         run: docker build -t telegram-notifier -f ArbiScanner.TelegramNotifierApp/Dockerfile .
+
+  validate-config:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Validate compose files
+        run: |
+          docker compose --env-file sample.env -f docker-compose.yml config -q
+          docker compose --env-file sample.env -f docker-compose.yml -f docker-compose.local.yml config -q
+
+      - name: Validate Kafka topic-init script syntax
+        run: sh -n kafka/init-topics.sh
+
+      - name: Validate Prometheus config and unit-test the Kafka alert rules
+        run: >
+          docker run --rm --entrypoint sh -v "$PWD/observability/prometheus:/p:ro" prom/prometheus:latest -c
+          'mkdir -p /etc/prometheus/rules && cp /p/rules/* /etc/prometheus/rules/ &&
+          promtool check config /p/prometheus.yaml && cd /p/rules && promtool test rules kafka.test.yaml'
+
+      - name: Validate Grafana dashboard JSON
+        run: python3 -m json.tool ArbiScannerWebApp/grafana/provisioning/dashboards/json/kafka.json > /dev/null

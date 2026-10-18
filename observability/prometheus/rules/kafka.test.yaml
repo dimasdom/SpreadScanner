@@ -1,0 +1,62 @@
+# Run: promtool test rules observability/prometheus/rules/kafka.test.yaml   (also runs in CI)
+rule_files:
+  - kafka.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - name: lag that keeps growing fires
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="webapp-spreads",topic="spreads",partition="0"}'
+        values: "0+50x40"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KafkaConsumerLagGrowing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: KafkaConsumerLagGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              consumergroup: webapp-spreads
+              topic: spreads
+            exp_annotations:
+              summary: "Consumer group webapp-spreads is falling behind on spreads"
+              description: "Lag is above 100 messages and has kept growing for 10 minutes (current: 1500)."
+
+  - name: a burst that drains does not fire
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="telegram-spreads",topic="spreads",partition="0"}'
+        values: "2000-100x19"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KafkaConsumerLagGrowing
+        exp_alerts: []
+
+  - name: shadow groups never alert
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_lag{consumergroup="webapp-spreads-shadow",topic="spreads",partition="0"}'
+        values: "0+50x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: KafkaConsumerLagGrowing
+        exp_alerts: []
+
+  - name: dead-lettered messages fire
+    interval: 1m
+    input_series:
+      - series: 'kafka_topic_partition_current_offset{topic="spreads.dlq",partition="0"}'
+        values: "0 0 0 1 1 1"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KafkaDeadLetterMessages
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              topic: spreads.dlq
+            exp_annotations:
+              summary: "Messages were dead-lettered to spreads.dlq"
+              description: "1 message(s) were parked in the last 15 minutes. Inspect the dlq-error headers (Kafka UI) and replay or discard."
