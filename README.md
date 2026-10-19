@@ -41,8 +41,8 @@ graph TB
 
     subgraph webapp ["ArbiScannerWebApp  ·  .NET 10"]
         WEB_CONSUMER["Kafka Consumer\n(group: webapp-spreads)"]
-        WEB_API["ASP.NET Core 10 API\nJWT · REST · SignalR"]
-        WEB_HUB["SignalR Hub"]
+        WEB_API["ASP.NET Core 10 API\nJWT · REST · SSE"]
+        WEB_HUB["SSE spread stream"]
     end
 
     subgraph adminpanel ["ArbiScannerAdminPanel  ·  .NET 10"]
@@ -63,7 +63,7 @@ graph TB
     end
 
     subgraph clients ["Clients"]
-        WEB_CLIENT["WebApp React SPA\nRedux Toolkit · SignalR Client"]
+        WEB_CLIENT["WebApp React SPA\nRedux Toolkit · SSE + SignalR (chat) clients"]
         ADMIN_CLIENT["AdminPanel React SPA\nRedux Toolkit"]
         MCP_CLIENT["External MCP Client\n(Claude Desktop, etc.)"]
     end
@@ -124,7 +124,7 @@ graph TB
 | Docker service       | Port(s)       | Purpose                                           | Technology                              |
 |----------------------|---------------|---------------------------------------------------|-----------------------------------------|
 | `arbitrage-scanner`  | —             | Core arbitrage engine; scans exchanges            | .NET 10, CCXT, Kafka, MongoDB           |
-| `web`                | 8080          | User-facing Web API                               | ASP.NET Core 10, PostgreSQL, Redis, MongoDB, SignalR |
+| `web`                | 8080          | User-facing Web API                               | ASP.NET Core 10, PostgreSQL, Redis, MongoDB, SSE |
 | `web-client`         | 80            | User-facing React SPA (spread dashboard)          | React, Vite, nginx                      |
 | `admin-api`          | 8081          | Admin Web API (users, subscriptions, payments)    | ASP.NET Core 10, PostgreSQL, Redis      |
 | `admin-client`       | 3002          | Admin React SPA                                   | React, Vite, nginx                      |
