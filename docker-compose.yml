@@ -342,9 +342,9 @@ services:
       RabbitMq__Password: guest
       RabbitMq__Exchange: spread_fanout_exchange
       RabbitMq__RoutingKey: ""
-      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). RabbitMq = unchanged; Shadow = also run a side-effect-free Kafka consumer + parity check.
+      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). Kafka = live (default); RabbitMq = legacy path; Shadow = RabbitMQ live + side-effect-free Kafka consumer.
       Messaging__ServiceName: webapp
-      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_WEB:-RabbitMq}"
+      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_WEB:-Kafka}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-web
       Redis__Endpoint: redis:6379
@@ -396,15 +396,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      # Kafka is only used in Shadow / cutover modes, so it must never gate startup while RabbitMQ is the live path.
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
       kafka:
         condition: service_healthy
-        required: false
       kafka-init:
         condition: service_completed_successfully
-        required: false
       redis:
         condition: service_healthy
       keycloak:
@@ -565,7 +561,7 @@ services:
       RabbitMq__RoutingKey: ""
       # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). RabbitMq = unchanged; Shadow = also run a side-effect-free Kafka consumer + parity check.
       Messaging__ServiceName: telegram
-      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_TELEGRAM:-RabbitMq}"
+      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_TELEGRAM:-Kafka}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-telegram-notifier
       Redis__Endpoint: redis:6379
@@ -589,15 +585,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      # Kafka is only used in Shadow / cutover modes, so it must never gate startup while RabbitMQ is the live path.
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
       kafka:
         condition: service_healthy
-        required: false
       kafka-init:
         condition: service_completed_successfully
-        required: false
       redis:
         condition: service_healthy
       loki:
@@ -621,9 +613,9 @@ services:
     environment:
       MongoDb_ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/ArbitrageScanner?authSource=admin"
       RABBITMQ_HOST: rabbitmq
-      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). Defaults = RabbitMQ only (today). Both true = shadow dual publish.
-      Messaging__Publish__RabbitMq: "${MESSAGING_PUBLISH_RABBITMQ:-true}"
-      Messaging__Publish__Kafka: "${MESSAGING_PUBLISH_KAFKA:-false}"
+      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). Default = Kafka only. Both true = dual publish (RabbitMQ authoritative).
+      Messaging__Publish__RabbitMq: "${MESSAGING_PUBLISH_RABBITMQ:-false}"
+      Messaging__Publish__Kafka: "${MESSAGING_PUBLISH_KAFKA:-true}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-arbitrage-scanner
       Arbitrage__SpreadSize: "${ARBITRAGE_SPREAD_SIZE}"
@@ -655,15 +647,11 @@ services:
       timeout: 5s
       retries: 5
     depends_on:
-      rabbitmq:
-        condition: service_healthy
-      # Kafka is only used in Shadow / cutover modes, so it must never gate startup while RabbitMQ is the live path.
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
       kafka:
         condition: service_healthy
-        required: false
       kafka-init:
         condition: service_completed_successfully
-        required: false
       mongodb:
         condition: service_healthy
       loki:

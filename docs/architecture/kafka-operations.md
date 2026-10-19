@@ -100,7 +100,28 @@ Replay = re-publish the payload to `spreads` with the same key once the cause is
   - `KafkaConsumerGroupHasNoMembers`, `KafkaBrokerDown`, `KafkaExporterDown`, `KafkaDeadLetterMessages`.
 - There is no Alertmanager yet: firing alerts show at `/prometheus/alerts` and on the **Kafka** dashboard (Grafana → ArbiScanner folder). Add Alertmanager or Grafana alerting when push notifications are wanted.
 
-## Shadow mode runbook (Phase 2)
+## Cutover (Phase 3): Kafka is the live path
+
+Compose defaults: the scanner publishes to Kafka only; the web API and the Telegram notifier consume `spreads` in groups `webapp-spreads` and `telegram-spreads`. RabbitMQ is not used by these three services (its container and the legacy code remain until Phase 4).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MESSAGING_PUBLISH_KAFKA` / `MESSAGING_PUBLISH_RABBITMQ` | `true` / `false` | Where the scanner publishes. Both `true` = dual publish, RabbitMQ authoritative. |
+| `MESSAGING_CONSUMER_MODE_WEB`, `…_TELEGRAM` | `Kafka` | `Kafka`, `RabbitMq` (legacy) or `Shadow`. |
+| `Messaging__Consumer__MaxOpenAlertAgeMinutes` | `10` | Telegram drops an Open older than this instead of alerting. |
+
+Behaviour worth knowing:
+
+- **Order of events:** all events of one spread share a key, hence a partition, hence are applied in order by one consumer.
+- **Retries and dead letters:** a handler failure (including a failed `Result` from the service layer) is retried 3 times with backoff, then parked on `spreads.dlq`; `KafkaDeadLetterMessages` fires. Undecodable payloads, missing message-ids and unknown actions skip the retries.
+- **Replay:** the first start of a group begins at the end of the log (`AutoOffsetReset=Latest`). Resetting a group's offsets re-runs side effects; Telegram will not re-alert for Opens older than the window above, the web API re-applies them idempotently by upsert (tickers are deduplicated only by message-id for 15 minutes).
+- **One web replica:** SignalR has no backplane, so a second `web` instance would receive only its share of partitions and push only to its own clients.
+- **Health:** the services report `kafka` instead of `rabbitmq`; the scanner reports `kafka` once RabbitMQ publishing is off.
+- **Back to RabbitMQ** (until Phase 4 removes it): `MESSAGING_PUBLISH_RABBITMQ=true`, `MESSAGING_PUBLISH_KAFKA=false`, and both consumer modes `RabbitMq`.
+
+## Shadow mode runbook (Phase 2, legacy)
+
+The shadow machinery (side-effect-free Kafka consumer plus RabbitMQ/Kafka parity check) predates the cutover and is only useful when both brokers are live. It is deleted in Phase 4.
 
 Everything ships **off**. Defaults reproduce today's behaviour exactly: the scanner publishes to RabbitMQ only, both consumers read RabbitMQ only, and Kafka is idle.
 

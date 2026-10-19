@@ -1,6 +1,6 @@
 # RabbitMQ → Kafka migration plan
 
-Status: **Phases 1 and 2 implemented (awaiting review/merge); Phase 3 not started.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
+Status: **Phases 1–3 implemented (awaiting review/merge); Phase 4 (remove RabbitMQ) next.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
 Supersedes [ADR-0001](../arc42/adr/0001-rabbitmq-fanout-protobuf.md) once Phase 5 lands (ADR-0007).
 
 ## 1. Current state (investigated)
@@ -85,6 +85,20 @@ Each phase ends deployable with CI green. One PR per repo (Conventional Commits 
 - Layering adjustment: the idempotency contract, spread key helper, protobuf contract and parity recorder/comparer live in `ArbiScannerWeb.Abstractions` / `.Infrastructure`; only Kafka-specific code is in `ArbiScannerWeb.Messaging.Kafka`. `ArbiScannerWeb.Infrastructure` must not reference the Kafka project because AdminPanel depends on it.
 - RabbitMQ consumers dedupe on message-id with the two-state store (legacy messages keep the content-hash path).
 - Operations: see the shadow-mode runbook in [kafka-operations.md](kafka-operations.md).
+
+### Phase 3 — as built
+
+The project is not deployed (it only exists as a GitHub repository), so the production-safety machinery of Phases 2–3 — a multi-day shadow soak, per-service staggered flag flips, a reversible rollout — has no live system to protect. Phase 3 therefore cuts over in one step and Compose now defaults to Kafka for the scanner, the web API and the Telegram notifier. The mode flags stay until Phase 4 so the legacy path can still be exercised in tests.
+
+- **Web API** (`Messaging__Consumer__Mode=Kafka`): `TradeOpportunityKafkaHandler` in group `webapp-spreads` applies Open/Update/Close through `ITradeOpportunityService`. RabbitMQ is neither registered nor health-checked; a Kafka health check gates health instead.
+- **Telegram** (`telegram-spreads`): `TelegramSpreadKafkaHandler`. Only Open alerts users; Update ignored; Close logged.
+- **Failures now surface.** `ITradeOpportunityService` returns a `Result` and never throws; the RabbitMQ consumer ignored it and acked, so a failed write lost the event silently. The Kafka handler throws on `Result.IsFailed`, so the event is retried and then dead-lettered.
+- **Idempotency:** `spread-dedupe:{service}:{message-id}` in the shared two-state store. Residual window: a crash between the ticker insert and the `done` marker can add one duplicate chart point after the 60 s claim expires. Deterministic ticker ids were considered and rejected: the ticker `_id` is deliberately unmapped and the model is shared with EF.
+- **Replay protection:** an Open older than `Messaging__Consumer__MaxOpenAlertAgeMinutes` (default 10) is not alerted on, so an outage or offset reset never re-alerts users.
+- **Dead letters:** a missing message-id, undecodable payload or unknown action is non-retryable and goes to `spreads.dlq` after one attempt.
+- **Compose:** scanner `Messaging__Publish__Kafka=true`, `__RabbitMq=false`; both consumers default to `Kafka`; Kafka and `kafka-init` are now hard dependencies and RabbitMQ no longer gates these three services.
+- **Phase 4 will also delete** the shadow handler, parity recorder/comparer, parity alerts and the mode flags: they exist only to compare two brokers.
+- **Operational constraint:** the web API must stay at one replica (SignalR has no backplane), otherwise a spread would be pushed from whichever instance owns its partition.
 
 ### Out of scope
 
