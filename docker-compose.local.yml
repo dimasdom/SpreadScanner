@@ -5,7 +5,7 @@
 # auto-loaded override would silently change production behavior. Opt in
 # explicitly instead:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres kafka kafka-init redis mongodb keycloak
 #
 # Exposes Keycloak directly on a host port (bypassing nginx/TLS entirely) and
 # points KC_HOSTNAME at that plain-HTTP address, so a locally-run API

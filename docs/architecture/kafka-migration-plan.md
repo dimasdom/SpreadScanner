@@ -1,6 +1,6 @@
 # RabbitMQ → Kafka migration plan
 
-Status: **Phases 1–3 implemented (awaiting review/merge); Phase 4 (remove RabbitMQ) next.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
+Status: **Phases 1–4 implemented (awaiting review/merge); Phase 5 (ADR + documentation) next.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
 Supersedes [ADR-0001](../arc42/adr/0001-rabbitmq-fanout-protobuf.md) once Phase 5 lands (ADR-0007).
 
 ## 1. Current state (investigated)
@@ -78,7 +78,9 @@ Each phase ends deployable with CI green. One PR per repo (Conventional Commits 
 4. **Remove RabbitMQ** (explicit approval first — deletes exchanges/queues/volume): code, health checks, nginx `/rabbitmq/` route, compose service, `sample.env` + appsettings keys, packages, RabbitMQ tests/fixtures; Kafka health check in all three services.
 5. **Docs:** ADR-0007 (supersedes 0001; alternatives: stay on RabbitMQ, RabbitMQ Streams; where schema registry / Kubernetes / Streams-ksqlDB would fit later), arc42 sections + index, READMEs, CLAUDE.md.
 
-### Phase 2 — as built
+### Phase 2 — as built (superseded by Phase 4)
+
+> The dual-publish and shadow machinery described here was removed again in Phase 4. It is kept as a record of how the cutover was prepared.
 
 - Scanner: `Messaging__Publish__RabbitMq` (default `true`) / `__Kafka` (default `false`). One `message-id` + producer timestamp shared by both brokers. Shadow Kafka publish is fire-and-observe; failures are counted, not thrown. Health: `rabbitmq` check only when RabbitMQ is published, `kafka` check only when Kafka is the sole path.
 - Consumers: `Messaging__Consumer__Mode` = `RabbitMq` (default) | `Shadow` | `Kafka` (rejected at startup until Phase 3) plus `Messaging__ServiceName`. `Shadow` adds consumer group `{service}-spreads-shadow` with a side-effect-free handler and the parity comparer.
@@ -99,6 +101,17 @@ The project is not deployed (it only exists as a GitHub repository), so the prod
 - **Compose:** scanner `Messaging__Publish__Kafka=true`, `__RabbitMq=false`; both consumers default to `Kafka`; Kafka and `kafka-init` are now hard dependencies and RabbitMQ no longer gates these three services.
 - **Phase 4 will also delete** the shadow handler, parity recorder/comparer, parity alerts and the mode flags: they exist only to compare two brokers.
 - **Operational constraint:** the web API must stay at one replica (SignalR has no backplane), otherwise a spread would be pushed from whichever instance owns its partition.
+
+### Phase 4 — as built
+
+RabbitMQ is gone from every service, and so is the migration scaffolding that existed only to compare the two brokers. Nothing was deployed, so there were no queues, exchanges or data to preserve and no destructive step to confirm.
+
+- **Scanner:** `ServicesCommunicationService` publishes to Kafka only (awaited; a failure is counted in `arbiscanner_messaging_publish_kafka_failures_total` and rethrown to the observer, as RabbitMQ failures were). `PostPossiblePositionFanout`, the topology declaration, `RabbitMqConnectionFactory`, `RabbitMqHealthCheck`, `MessagingPublishOptions` and the `RabbitMQ.Client`, `Polly.Core` and `Testcontainers.RabbitMq` packages are removed. The health endpoint reports `mongo` and `kafka`.
+- **Web API:** `RabbitMqService`, `IRabbitMqService`, `MessageProcessingService`, `RabbitMqHealthCheck`, `RabbitMqSettings`, the shadow handler, the parity recorder / comparer / metrics, and the `Messaging:Consumer:Mode` switch are removed. `AddSpreadMessaging<THandler>` always registers the consumer and binds lazily from configuration. Health reports `postgres`, `mongo`, `redis`, `kafka`.
+- **Telegram:** `SpreadsMessageBroker`, the RabbitMQ registration / settings / trace source and the parity meter are removed.
+- **Tests:** all RabbitMQ unit and integration tests and fixtures are deleted; the Kafka suites (ordering, restart, duplicates, DLQ, rebalance, full-stack cutover, publisher) remain.
+- **Root:** the `rabbitmq` service, its volume and config, the nginx `/rabbitmq/` route, all `RabbitMq__*` / `RABBITMQ_*` settings and the migration switches are removed; the parity alerts are replaced by `KafkaPublishFailing`. No Grafana dashboard ever existed for RabbitMQ, so none was removed.
+- **Left for Phase 5:** README, arc42 and CLAUDE.md still describe RabbitMQ; ADR-0007 supersedes ADR-0001.
 
 ### Out of scope
 

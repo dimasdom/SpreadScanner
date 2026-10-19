@@ -9,7 +9,6 @@
 #
 # Port map:
 #   5432  - PostgreSQL
-#   5672  - RabbitMQ AMQP  | 15672 - RabbitMQ management UI
 #   (Kafka 9092 is compose-network only; 127.0.0.1:8088 = Kafka UI, `--profile tools`)
 #   6379  - Redis
 #   27017 - MongoDB
@@ -39,7 +38,6 @@
 #   /ai-hub/     -> ai-assistant (SignalR chat hub, same arbiscanner-web-spa bearer
 #                                  token as every other ArbiScannerWeb.API call — see
 #                                  ArbiScanner.AiAssistant/README.md)
-#   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
 #
 # Keycloak (OIDC/OAuth2 for ArbiScannerWebApp, see keycloak/README.md) is NOT
 # path-routed — its own /admin/{realm}/console paths collide with the /admin/
@@ -71,30 +69,8 @@ services:
     networks:
       - arbiscanner
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: arbiscanner-rabbitmq
-    restart: unless-stopped
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-      # Serves the management UI behind the gateway nginx at /rabbitmq/
-      - ./observability/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - arbiscanner
-
   # ── Kafka (KRaft, single node) ────────────────────────────────────────────────
-  # Event backbone being migrated to from RabbitMQ — see docs/architecture/kafka-migration-plan.md.
+  # Event backbone for spread events — see docs/architecture/kafka-migration-plan.md.
   # No host port is published and the listener is PLAINTEXT: it is reachable only on the
   # compose network. docker-compose.local.yml adds a localhost listener for local dev.
 
@@ -336,15 +312,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__SqlServer: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Queue: spread_api
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
-      RabbitMq__Exchange: spread_fanout_exchange
-      RabbitMq__RoutingKey: ""
-      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). Kafka = live (default); RabbitMq = legacy path; Shadow = RabbitMQ live + side-effect-free Kafka consumer.
       Messaging__ServiceName: webapp
-      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_WEB:-Kafka}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-web
       Redis__Endpoint: redis:6379
@@ -415,7 +383,7 @@ services:
   web-client:
     build:
       # Root context: the gateway nginx config lives at ./nginx (repo root, not the
-      # submodule) since it routes to all four submodules plus Grafana/Prometheus/RabbitMQ.
+      # submodule) since it routes to all four submodules plus Grafana/Prometheus.
       context: .
       dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
@@ -444,7 +412,6 @@ services:
       - admin-client
       - grafana
       - prometheus
-      - rabbitmq
       - keycloak
     networks:
       - arbiscanner
@@ -553,15 +520,7 @@ services:
       - "8085:8085"
     environment:
       ConnectionStrings__PostgreSqlConnection: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Queue: spread_telegram
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
-      RabbitMq__Exchange: spread_fanout_exchange
-      RabbitMq__RoutingKey: ""
-      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). RabbitMq = unchanged; Shadow = also run a side-effect-free Kafka consumer + parity check.
       Messaging__ServiceName: telegram
-      Messaging__Consumer__Mode: "${MESSAGING_CONSUMER_MODE_TELEGRAM:-Kafka}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-telegram-notifier
       Redis__Endpoint: redis:6379
@@ -612,10 +571,6 @@ services:
       - "8086:8085"
     environment:
       MongoDb_ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/ArbitrageScanner?authSource=admin"
-      RABBITMQ_HOST: rabbitmq
-      # RabbitMQ -> Kafka migration (docs/architecture/kafka-migration-plan.md). Default = Kafka only. Both true = dual publish (RabbitMQ authoritative).
-      Messaging__Publish__RabbitMq: "${MESSAGING_PUBLISH_RABBITMQ:-false}"
-      Messaging__Publish__Kafka: "${MESSAGING_PUBLISH_KAFKA:-true}"
       Kafka__BootstrapServers: kafka:9092
       Kafka__ClientId: arbiscanner-arbitrage-scanner
       Arbitrage__SpreadSize: "${ARBITRAGE_SPREAD_SIZE}"
@@ -766,7 +721,6 @@ services:
 
 volumes:
   postgres-data:
-  rabbitmq-data:
   kafka-data:
   mongodb-data:
   loki-data:

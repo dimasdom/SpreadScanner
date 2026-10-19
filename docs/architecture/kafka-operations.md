@@ -96,19 +96,19 @@ Replay = re-publish the payload to `spreads` with the same key once the cause is
 ## Alerts and dashboard
 
 - Rules: [observability/prometheus/rules/kafka.rules.yaml](../../observability/prometheus/rules/kafka.rules.yaml), unit-tested by `kafka.test.yaml` (`promtool test rules`, also run in CI).
-  - `KafkaConsumerLagGrowing` — lag > 100 **and** still rising for 10 min (a burst that drains does not fire; `*-shadow` groups are excluded).
-  - `KafkaConsumerGroupHasNoMembers`, `KafkaBrokerDown`, `KafkaExporterDown`, `KafkaDeadLetterMessages`.
+  - `KafkaConsumerLagGrowing` — lag > 100 **and** still rising for 10 min (a burst that drains does not fire).
+  - `KafkaConsumerGroupHasNoMembers`, `KafkaBrokerDown`, `KafkaExporterDown`, `KafkaDeadLetterMessages`, and `KafkaPublishFailing` (the scanner could not publish).
 - There is no Alertmanager yet: firing alerts show at `/prometheus/alerts` and on the **Kafka** dashboard (Grafana → ArbiScanner folder). Add Alertmanager or Grafana alerting when push notifications are wanted.
 
-## Cutover (Phase 3): Kafka is the live path
+## Event flow
 
-Compose defaults: the scanner publishes to Kafka only; the web API and the Telegram notifier consume `spreads` in groups `webapp-spreads` and `telegram-spreads`. RabbitMQ is not used by these three services (its container and the legacy code remain until Phase 4).
+The scanner publishes every spread event (Open / Update / Close) to `spreads`; the web API and the Telegram notifier consume it in groups `webapp-spreads` and `telegram-spreads`. Kafka is the only broker in the system.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MESSAGING_PUBLISH_KAFKA` / `MESSAGING_PUBLISH_RABBITMQ` | `true` / `false` | Where the scanner publishes. Both `true` = dual publish, RabbitMQ authoritative. |
-| `MESSAGING_CONSUMER_MODE_WEB`, `…_TELEGRAM` | `Kafka` | `Kafka`, `RabbitMq` (legacy) or `Shadow`. |
+| `Messaging__ServiceName` | per service | Derives the consumer group (`{ServiceName}-spreads`) and scopes duplicate-suppression keys. Required. |
 | `Messaging__Consumer__MaxOpenAlertAgeMinutes` | `10` | Telegram drops an Open older than this instead of alerting. |
+| `Kafka__Consumer__Enabled` | `true` | `false` keeps the consumer from starting (hosts and tests that run without a broker). |
 
 Behaviour worth knowing:
 
@@ -116,46 +116,4 @@ Behaviour worth knowing:
 - **Retries and dead letters:** a handler failure (including a failed `Result` from the service layer) is retried 3 times with backoff, then parked on `spreads.dlq`; `KafkaDeadLetterMessages` fires. Undecodable payloads, missing message-ids and unknown actions skip the retries.
 - **Replay:** the first start of a group begins at the end of the log (`AutoOffsetReset=Latest`). Resetting a group's offsets re-runs side effects; Telegram will not re-alert for Opens older than the window above, the web API re-applies them idempotently by upsert (tickers are deduplicated only by message-id for 15 minutes).
 - **One web replica:** SignalR has no backplane, so a second `web` instance would receive only its share of partitions and push only to its own clients.
-- **Health:** the services report `kafka` instead of `rabbitmq`; the scanner reports `kafka` once RabbitMQ publishing is off.
-- **Back to RabbitMQ** (until Phase 4 removes it): `MESSAGING_PUBLISH_RABBITMQ=true`, `MESSAGING_PUBLISH_KAFKA=false`, and both consumer modes `RabbitMq`.
-
-## Shadow mode runbook (Phase 2, legacy)
-
-The shadow machinery (side-effect-free Kafka consumer plus RabbitMQ/Kafka parity check) predates the cutover and is only useful when both brokers are live. It is deleted in Phase 4.
-
-Everything ships **off**. Defaults reproduce today's behaviour exactly: the scanner publishes to RabbitMQ only, both consumers read RabbitMQ only, and Kafka is idle.
-
-### Enable (in this order; each step is reversible by unsetting the variable and recreating that one service)
-
-| # | Set (in `.env`) | Recreate | What it does |
-|---|---|---|---|
-| 1 | `MESSAGING_PUBLISH_KAFKA=true` | `arbitrage-scanner` | Scanner also publishes every event to Kafka after RabbitMQ succeeded. Never awaited, never throws. |
-| 2 | `MESSAGING_CONSUMER_MODE_WEB=Shadow` | `web` | Adds consumer group `webapp-spreads-shadow` (decode + verify key + record, **no** Mongo/Postgres/SignalR writes) and the parity comparer. RabbitMQ consumption is untouched. |
-| 3 | `MESSAGING_CONSUMER_MODE_TELEGRAM=Shadow` | `telegram-notifier` | Same for `telegram-spreads-shadow` (**no** Telegram messages). |
-
-`kafka`/`kafka-init` are `required: false` dependencies of these services, so a Kafka problem can never stop them from starting while RabbitMQ is live. No Kafka health check is registered in shadow mode for the same reason.
-
-### What to watch
-
-- **Grafana → ArbiScanner → Kafka**: produce rate on `spreads` should track the RabbitMQ rate; lag for `*-shadow` groups should sit near 0 (those groups are excluded from the lag alert on purpose — they are diagnostic).
-- **Service logs**: `Kafka partitions assigned`, `Shadow: would apply …`, and once per minute `Parity OK for …` (or `Parity MISMATCH …` listing spread keys).
-- **Prometheus alerts** (`/prometheus/alerts`): `MessagingParityMismatch`, `MessagingKafkaKeyMismatch`, `KafkaShadowPublishFailing`, `KafkaDeadLetterMessages`.
-
-Ignore the first ~3 minutes after each step: only minutes that begin after a service starts are compared, and the comparer waits 2 minutes for a minute to close.
-
-### Cutover criteria (Phase 3 starts only when all hold)
-
-1. At least 48 hours of shadow on both consumers with `MessagingParityMismatch` never firing and `missing_in_*` counters flat.
-2. `KafkaDeadLetterMessages` and `KafkaShadowPublishFailing` quiet.
-3. A deliberate restart of the scanner, of Kafka, and of each consumer during the soak, each followed by a clean parity result.
-
-### How parity works
-
-The scanner stamps each event with one `message-id` and one producer timestamp (seconds precision) on **both** brokers. Each consumer records `{message-id}|{key}` into a Redis set per `(service, backend, minute-of-producer-timestamp)`; the comparer diffs the RabbitMQ and Kafka sets for every closed minute and exports `arbiscanner_messaging_parity_{matched,missing_in_kafka,missing_in_rabbitmq,key_mismatch}_total{service=…}`. Sets are exact and redelivery-proof, expire after 3 hours, and cost a few hundred small members per minute at today's ~100 events/min.
-
-Events published before the scanner was upgraded carry no message-id: they are processed through the legacy content-hash path and are not part of the parity data.
-
-### Known behaviours
-
-- A message the shadow consumer cannot process is retried, then dead-lettered to the shared `spreads.dlq`. That is intentional (a poison message would also fail the live consumer) but the DLQ cannot tell shadow and live groups apart yet.
-- The RabbitMQ consumers now dedupe messages that carry a message-id with the same two-state Redis store the Kafka consumer will use (`spread-dedupe:{service}:{message-id}`). A crash mid-handler therefore retries the message after at most 60 s instead of skipping it as a duplicate for 15 minutes.
+- **Health:** all three services report a `kafka` check (a metadata request to the broker).

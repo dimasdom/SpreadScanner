@@ -35,16 +35,6 @@ tests:
         alertname: KafkaConsumerLagGrowing
         exp_alerts: []
 
-  - name: shadow groups never alert
-    interval: 1m
-    input_series:
-      - series: 'kafka_consumergroup_lag{consumergroup="webapp-spreads-shadow",topic="spreads",partition="0"}'
-        values: "0+50x40"
-    alert_rule_test:
-      - eval_time: 30m
-        alertname: KafkaConsumerLagGrowing
-        exp_alerts: []
-
   - name: dead-lettered messages fire
     interval: 1m
     input_series:
@@ -61,39 +51,17 @@ tests:
               summary: "Messages were dead-lettered to spreads.dlq"
               description: "1 message(s) were parked in the last 15 minutes. Inspect the dlq-error headers (Kafka UI) and replay or discard."
 
-  - name: parity mismatch fires and a clean run does not
-    interval: 1m
-    input_series:
-      - series: 'arbiscanner_messaging_parity_missing_in_kafka_total{service="webapp"}'
-        values: "0 0 0 1 1 1 1 1 1 1"
-      - series: 'arbiscanner_messaging_parity_missing_in_rabbitmq_total{service="webapp"}'
-        values: "0 0 0 0 0 0 0 0 0 0"
-      - series: 'arbiscanner_messaging_parity_missing_in_kafka_total{service="telegram"}'
-        values: "0 0 0 0 0 0 0 0 0 0"
-      - series: 'arbiscanner_messaging_parity_missing_in_rabbitmq_total{service="telegram"}'
-        values: "0 0 0 0 0 0 0 0 0 0"
-    alert_rule_test:
-      - eval_time: 9m
-        alertname: MessagingParityMismatch
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: webapp
-            exp_annotations:
-              summary: "RabbitMQ and Kafka disagree for webapp"
-              description: "1 message(s) in the last 15 minutes were delivered by only one broker. The consumer logs the affected spread keys ('Parity MISMATCH'). Do not cut over until this stays at zero."
-
-  - name: shadow publish failures fire
+  - name: publish failures fire
     interval: 1m
     input_series:
       - series: 'arbiscanner_messaging_publish_kafka_failures_total{job="arbiscanner-arbitrage-scanner"}'
         values: "0 0 3 3 3"
     alert_rule_test:
       - eval_time: 4m
-        alertname: KafkaShadowPublishFailing
+        alertname: KafkaPublishFailing
         exp_alerts:
           - exp_labels:
               severity: warning
             exp_annotations:
               summary: "The scanner failed to publish 3 event(s) to Kafka in the last 10 minutes"
-              description: "RabbitMQ is unaffected (shadow mode). Check the broker and the scanner logs ('Shadow Kafka publish failed')."
+              description: "Each failure also threw into the observer that raised it. Check the broker and the scanner logs ('Kafka produce failed')."

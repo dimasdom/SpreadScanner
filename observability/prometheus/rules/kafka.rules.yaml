@@ -25,9 +25,9 @@ groups:
       # A burst that drains again does not fire because the derivative turns negative.
       - alert: KafkaConsumerLagGrowing
         expr: |
-          sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup!~".*-shadow"}) > 100
+          sum by (consumergroup, topic) (kafka_consumergroup_lag) > 100
           and
-          deriv(sum by (consumergroup, topic) (kafka_consumergroup_lag{consumergroup!~".*-shadow"})[10m:1m]) > 0
+          deriv(sum by (consumergroup, topic) (kafka_consumergroup_lag)[10m:1m]) > 0
         for: 10m
         labels:
           severity: warning
@@ -36,7 +36,7 @@ groups:
           description: "Lag is above 100 messages and has kept growing for 10 minutes (current: {{ $value }})."
 
       - alert: KafkaConsumerGroupHasNoMembers
-        expr: kafka_consumergroup_members{consumergroup!~".*-shadow"} == 0
+        expr: kafka_consumergroup_members == 0
         for: 5m
         labels:
           severity: warning
@@ -52,37 +52,13 @@ groups:
           summary: "Messages were dead-lettered to {{ $labels.topic }}"
           description: "{{ $value }} message(s) were parked in the last 15 minutes. Inspect the dlq-error headers (Kafka UI) and replay or discard."
 
-  # RabbitMQ -> Kafka migration checks (shadow mode). Exported by the consuming services / the scanner, not by kafka-exporter.
-  - name: kafka-migration
+  # Publish side (exported by the scanner, not by kafka-exporter).
+  - name: kafka-publish
     rules:
-      # A closed minute in which one broker delivered a message the other did not. Persists in the window for 15 minutes.
-      - alert: MessagingParityMismatch
-        expr: |
-          sum by (service) (
-            increase(arbiscanner_messaging_parity_missing_in_kafka_total[15m])
-            + increase(arbiscanner_messaging_parity_missing_in_rabbitmq_total[15m])
-          ) > 0
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "RabbitMQ and Kafka disagree for {{ $labels.service }}"
-          description: "{{ $value }} message(s) in the last 15 minutes were delivered by only one broker. The consumer logs the affected spread keys ('Parity MISMATCH'). Do not cut over until this stays at zero."
-
-      # Kafka partition key differs from the key derived from the payload: scanner and consumer disagree on the key format.
-      - alert: MessagingKafkaKeyMismatch
-        expr: sum by (service) (increase(arbiscanner_messaging_parity_key_mismatch_total[15m])) > 0
-        labels:
-          severity: warning
-        annotations:
-          summary: "Kafka key format differs between producer and {{ $labels.service }}"
-          description: "Check the spread-key golden vectors in both repositories; keys landing on the wrong partition break per-spread ordering."
-
-      # Shadow publishing is swallowed by design, so this is the only place a failing Kafka producer shows up.
-      - alert: KafkaShadowPublishFailing
+      - alert: KafkaPublishFailing
         expr: sum(increase(arbiscanner_messaging_publish_kafka_failures_total[10m])) > 0
         labels:
           severity: warning
         annotations:
           summary: "The scanner failed to publish {{ $value }} event(s) to Kafka in the last 10 minutes"
-          description: "RabbitMQ is unaffected (shadow mode). Check the broker and the scanner logs ('Shadow Kafka publish failed')."
+          description: "Each failure also threw into the observer that raised it. Check the broker and the scanner logs ('Kafka produce failed')."
