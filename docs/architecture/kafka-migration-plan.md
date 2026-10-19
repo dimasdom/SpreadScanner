@@ -1,6 +1,6 @@
 # RabbitMQ → Kafka migration plan
 
-Status: **Phase 1 complete (awaiting review/merge); Phase 2 not started.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
+Status: **Phases 1 and 2 implemented (awaiting review/merge); Phase 3 not started.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
 Supersedes [ADR-0001](../arc42/adr/0001-rabbitmq-fanout-protobuf.md) once Phase 5 lands (ADR-0007).
 
 ## 1. Current state (investigated)
@@ -77,6 +77,14 @@ Each phase ends deployable with CI green. One PR per repo (Conventional Commits 
 3. **Cutover, one flag flip each, reversible:** Telegram first (stateless), WebApp second (with idempotent ticker insert).
 4. **Remove RabbitMQ** (explicit approval first — deletes exchanges/queues/volume): code, health checks, nginx `/rabbitmq/` route, compose service, `sample.env` + appsettings keys, packages, RabbitMQ tests/fixtures; Kafka health check in all three services.
 5. **Docs:** ADR-0007 (supersedes 0001; alternatives: stay on RabbitMQ, RabbitMQ Streams; where schema registry / Kubernetes / Streams-ksqlDB would fit later), arc42 sections + index, READMEs, CLAUDE.md.
+
+### Phase 2 — as built
+
+- Scanner: `Messaging__Publish__RabbitMq` (default `true`) / `__Kafka` (default `false`). One `message-id` + producer timestamp shared by both brokers. Shadow Kafka publish is fire-and-observe; failures are counted, not thrown. Health: `rabbitmq` check only when RabbitMQ is published, `kafka` check only when Kafka is the sole path.
+- Consumers: `Messaging__Consumer__Mode` = `RabbitMq` (default) | `Shadow` | `Kafka` (rejected at startup until Phase 3) plus `Messaging__ServiceName`. `Shadow` adds consumer group `{service}-spreads-shadow` with a side-effect-free handler and the parity comparer.
+- Layering adjustment: the idempotency contract, spread key helper, protobuf contract and parity recorder/comparer live in `ArbiScannerWeb.Abstractions` / `.Infrastructure`; only Kafka-specific code is in `ArbiScannerWeb.Messaging.Kafka`. `ArbiScannerWeb.Infrastructure` must not reference the Kafka project because AdminPanel depends on it.
+- RabbitMQ consumers dedupe on message-id with the two-state store (legacy messages keep the content-hash path).
+- Operations: see the shadow-mode runbook in [kafka-operations.md](kafka-operations.md).
 
 ### Out of scope
 
