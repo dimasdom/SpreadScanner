@@ -1,6 +1,6 @@
 # RabbitMQ → Kafka migration plan
 
-Status: **Phases 1–4 implemented (awaiting review/merge); Phase 5 (ADR + documentation) next.** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
+Status: **All five phases implemented (awaiting review/merge).** Scope: `ArbitrageScanner` (producer), `ArbiScannerWebApp` (consumer), `ArbiScanner.TelegramNotifierApp` (consumer).
 Supersedes [ADR-0001](../arc42/adr/0001-rabbitmq-fanout-protobuf.md) once Phase 5 lands (ADR-0007).
 
 ## 1. Current state (investigated)
@@ -112,6 +112,13 @@ RabbitMQ is gone from every service, and so is the migration scaffolding that ex
 - **Tests:** all RabbitMQ unit and integration tests and fixtures are deleted; the Kafka suites (ordering, restart, duplicates, DLQ, rebalance, full-stack cutover, publisher) remain.
 - **Root:** the `rabbitmq` service, its volume and config, the nginx `/rabbitmq/` route, all `RabbitMq__*` / `RABBITMQ_*` settings and the migration switches are removed; the parity alerts are replaced by `KafkaPublishFailing`. No Grafana dashboard ever existed for RabbitMQ, so none was removed.
 - **Left for Phase 5:** README, arc42 and CLAUDE.md still describe RabbitMQ; ADR-0007 supersedes ADR-0001.
+
+### Phase 5 — as built
+
+- **ADR:** [`docs/arc42/adr/0007-kafka-event-backbone.md`](../arc42/adr/0007-kafka-event-backbone.md) — context, decision, alternatives (stay on RabbitMQ, RabbitMQ Streams, HTTP/database polling), consequences and trade-offs (operating cost, ordering vs parallelism, replay, the one-host/RF=1 reality, the single web replica, the contract without a schema registry), and where a schema registry, Kubernetes and Kafka Streams/ksqlDB would fit later. It lives in `docs/arc42/adr/` rather than the `docs/adr/` named in the original brief, because that is where the repository's existing ADRs (0001–0006) and their index live. ADR-0001 is marked superseded; its Protobuf decision still stands.
+- **Architecture documentation:** arc42 sections 1, 3, 4, 5, 6 (the spread scenario was rewritten as the Open/Update/Close lifecycle with commit-after-processing), 7, 8, 9, 10, 11 (new Kafka, schema-registry and authentication risks), 12 and ADRs 0002 / 0005 / 0006.
+- **READMEs and guides:** root `README.md`, `CLAUDE.md` (a new "Messaging is Kafka only" section of conventions), `MCP_TESTING.md`, `AI_ASSISTANT_TESTING.md`, `keycloak/README.md`, and the scanner, web API, Telegram notifier and MCP server READMEs.
+- **Not touched on purpose:** `CHANGELOG.md` files (release-please owns them), `docs/investigations/` (point-in-time write-ups), and the personal / career documents (`PROFILE.md`, `MASTER_EXPERIENCE.md`, `ArbiScannerUpd.md`) and the `MASTER_README.md` snapshot, which still describe RabbitMQ.
 
 ### Out of scope
 

@@ -13,7 +13,7 @@ that render incrementally, and tool results arriving as one `SpreadsData` /
 moment a message is sent until `ConversationEnd` (or any other chunk)
 arrives - see the AiAssistant `README.md` → "Transport".
 
-Assumes you already have Postgres/RabbitMQ/Redis/MongoDB/Keycloak running and
+Assumes you already have Postgres/Kafka/Redis/MongoDB/Keycloak running and
 `ArbiScanner.McpServer` reachable — see this repo's root `README.md` and
 [`MCP_TESTING.md`](MCP_TESTING.md) if that part isn't set up yet.
 `ArbiScanner.AiAssistant` reuses the exact same Keycloak client
@@ -121,7 +121,7 @@ your local Keycloak/host services the same way `mcp-server`'s override does.
 
 ```bash
 # infra only, from the monorepo root
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres kafka kafka-init redis mongodb keycloak
 
 # Terminal 1
 cd ArbiScannerWebApp/ArbiScannerWeb.API && dotnet run
@@ -153,7 +153,7 @@ assistant is running on its default port.
 ### Option B — full stack via Docker Compose
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up --build ai-assistant mcp-server web postgres rabbitmq redis mongodb keycloak
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build ai-assistant mcp-server web postgres kafka kafka-init redis mongodb keycloak
 ```
 
 Confirm it's healthy:
