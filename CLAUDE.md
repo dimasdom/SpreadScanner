@@ -9,7 +9,7 @@ This is the **monorepo root** for ArbiScanner, a cryptocurrency arbitrage scanni
 | Submodule directory | Purpose | Runtime |
 |---|---|---|
 | `ArbitrageScanner` | Core scanning engine — scans 12+ exchanges via ccxt, detects spreads, publishes to Kafka | .NET 10 Worker |
-| `ArbiScannerWebApp` | User-facing API + React SPA — consumes spreads, serves them via REST/SignalR | .NET 10 + React 19 |
+| `ArbiScannerWebApp` | User-facing API + React SPA — consumes spreads, serves them via REST + SSE | .NET 10 + React 19 |
 | `ArbiScannerAdminPannel` | Admin/manager API + React SPA — users, subscriptions, OxaPay payments | .NET 10 + React 19 |
 | `ArbiScanner.TelegramNotifierApp` | Telegram bot + notification worker | .NET 10 Worker |
 | `ArbiScanner.McpServer` | MCP (Model Context Protocol) server — read-only spread-query tools for MCP clients (Claude Desktop, etc.) | .NET 10 ASP.NET Core |
@@ -34,7 +34,7 @@ This means the Docker build context for `ArbiScannerAdminPannel`'s API and for `
 ```
 ArbitrageScanner (ccxt, 12+ exchanges)
    -> protobuf TradeOpportunityModel -> Kafka topic "spreads" (key = spread identity: {type}:{exLo}:{exHi}:{pair})
-        -> group "webapp-spreads"   -> ArbiScannerWebApp (Postgres + Mongo + SignalR push to React SPA)
+        -> group "webapp-spreads"   -> ArbiScannerWebApp (Postgres + Mongo + SSE push to React SPA)
         -> group "telegram-spreads" -> TelegramNotifierApp (filters per-user criteria, sends via Telegram Bot API)
 
 ArbiScannerAdminPannel: separate API/SPA, talks to ArbiScannerWebApp's Postgres DB (read) + its own admin-only Postgres DB (owned), OxaPay for payments.
@@ -48,7 +48,8 @@ ArbiScanner.AiAssistant: SignalR chat backend for ArbiScannerWeb.Client; on a sp
   - The message key (`{type}:{exLo}:{exHi}:{pair}`, built by `SpreadKey` / `SpreadEventKeys`) is the spread's stable identity. Never put changing state (long/short direction) in it. The helper exists twice — `ArbitrageScanner.Infrastructure/Messaging/Kafka` and `ArbiScannerWeb.Infrastructure/Messaging` — kept identical by `spread-key-vectors.json` in both test projects; change both together or not at all.
   - Consumers commit offsets after processing and dedupe by `message-id` (`spread-dedupe:{service}:{message-id}` in Redis). `Messaging__ServiceName` derives the consumer group and is required; `Kafka__Consumer__Enabled=false` turns a consumer off for hosts without a broker.
   - `ArbiScannerWeb.Messaging.Kafka` is its own project on purpose: `ArbiScannerAdminPannel` references `ArbiScannerWeb.Infrastructure`, so Kafka code must not live there. The Telegram worker references the same project and its Docker build must copy it (see its Dockerfile).
-  - The web API must stay a single replica (SignalR has no backplane).
+  - The web API must stay a single replica (the SSE spread-stream broker is in-process; there is no backplane).
+  - Live spread updates use Server-Sent Events, `GET /api/TradeOpportunity/Stream/{id}` (`SpreadStreamController`), not SignalR; only `ArbiScanner.AiAssistant`'s chat hub still uses SignalR. Protocol, resume and operations: `ArbiScannerWebApp/README.md`, "Live Spread Updates (SSE)". nginx needs buffering off, a long read timeout and HTTP/2 for it (see `nginx/nginx.conf`).
 - **Three Postgres databases**: `ArbiScannerBot` (shared — owned/migrated by `ArbiScannerWebApp`; users, Telegram links, accounts), `ArbiScannerAdminPanelDb` (owned/migrated by `ArbiScannerAdminPannel`; admin users, subscriptions, payments), and `keycloak` (owned by Keycloak itself — created once by hand, see [Authentication](#authentication--self-hosted-keycloak-oidc)). Never create EF migrations for `AppDbContext` from the AdminPanel project, and never create migrations for `AdminPanelAppDbContext` from the WebApp project.
 - **MongoDB** is used by both `ArbitrageScanner` (found-spreads only) and `ArbiScannerWebApp` (spreads + historical ticker data) — separate databases/collections, not shared.
 - All six services (the four original ones plus `ArbiScanner.McpServer`/`ArbiScanner.AiAssistant`) export OpenTelemetry traces via OTLP gRPC to Grafana Tempo, and expose Prometheus metrics (`/metrics` on the web APIs, a standalone listener on port 8085 for worker services). Logs go through Serilog to Grafana Loki. If you touch tracing/logging config in one service, check whether the same pattern needs mirroring in the others — it's duplicated per-submodule, not shared.
@@ -96,7 +97,7 @@ dotnet test path/to/One.Tests.csproj --filter "FullyQualifiedName~ClassName.Meth
 ### React clients (`ArbiScannerWeb.Client`, `ArbiScannerAdminPanel.Client`)
 ```bash
 npm install
-npm run dev        # Vite dev server, proxies /api and /hubs to the local API
+npm run dev        # Vite dev server, proxies /api (REST and the SSE stream) to the local API
 npm run build       # tsc -b && vite build
 npm run lint        # eslint .
 ```
