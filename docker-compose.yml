@@ -9,7 +9,7 @@
 #
 # Port map:
 #   5432  - PostgreSQL
-#   5672  - RabbitMQ AMQP  | 15672 - RabbitMQ management UI
+#   (Kafka 9092 is compose-network only; 127.0.0.1:8088 = Kafka UI, `--profile tools`)
 #   6379  - Redis
 #   27017 - MongoDB
 #   3000  - Grafana
@@ -38,7 +38,6 @@
 #   /ai-hub/     -> ai-assistant (SignalR chat hub, same arbiscanner-web-spa bearer
 #                                  token as every other ArbiScannerWeb.API call — see
 #                                  ArbiScanner.AiAssistant/README.md)
-#   /rabbitmq/   -> rabbitmq management UI (management.path_prefix=/rabbitmq)
 #
 # Keycloak (OIDC/OAuth2 for ArbiScannerWebApp, see keycloak/README.md) is NOT
 # path-routed — its own /admin/{realm}/console paths collide with the /admin/
@@ -70,25 +69,93 @@ services:
     networks:
       - arbiscanner
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: arbiscanner-rabbitmq
+  # ── Kafka (KRaft, single node) ────────────────────────────────────────────────
+  # Event backbone for spread events — see docs/architecture/kafka-migration-plan.md.
+  # No host port is published and the listener is PLAINTEXT: it is reachable only on the
+  # compose network. docker-compose.local.yml adds a localhost listener for local dev.
+
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: arbiscanner-kafka
+    restart: unless-stopped
+    environment:
+      CLUSTER_ID: "${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # Topics come from kafka-init only.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Single broker: internal topics cannot be replicated. Use 3 / min.insync.replicas=2 on a 3-broker cluster.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_HEAP_OPTS: "${KAFKA_HEAP_OPTS:--Xms512m -Xmx512m}"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    networks:
+      - arbiscanner
+
+  # One-shot: creates the topics, then exits. Services that need topics to exist should use
+  # `depends_on: kafka-init: condition: service_completed_successfully`.
+  kafka-init:
+    image: apache/kafka:3.9.1
+    container_name: arbiscanner-kafka-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "/init-topics.sh"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_PARTITIONS: "${KAFKA_TOPIC_PARTITIONS:-12}"
+      KAFKA_REPLICATION_FACTOR: "${KAFKA_REPLICATION_FACTOR:-1}"
+      KAFKA_MIN_INSYNC_REPLICAS: "${KAFKA_MIN_INSYNC_REPLICAS:-1}"
+    volumes:
+      - ./kafka/init-topics.sh:/init-topics.sh:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - arbiscanner
+
+  # Exposes consumer-group lag per partition (kafka_consumergroup_lag) for Prometheus/Grafana.
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.9.0
+    container_name: arbiscanner-kafka-exporter
+    restart: unless-stopped
+    command:
+      - --kafka.server=kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - arbiscanner
+
+  # Optional inspection UI, local only: `docker compose --profile tools up -d kafka-ui`,
+  # then open http://localhost:8088. Bound to loopback; never expose it publicly (no auth).
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:v1.4.2
+    container_name: arbiscanner-kafka-ui
+    profiles: ["tools"]
     restart: unless-stopped
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "127.0.0.1:8088:8080"
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-      # Serves the management UI behind the gateway nginx at /rabbitmq/
-      - ./observability/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      KAFKA_CLUSTERS_0_NAME: arbiscanner
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
     networks:
       - arbiscanner
 
@@ -202,6 +269,7 @@ services:
       - --web.route-prefix=/prometheus/
     volumes:
       - ./observability/prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     networks:
       - arbiscanner
@@ -244,12 +312,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__SqlServer: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Queue: spread_api
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
-      RabbitMq__Exchange: spread_fanout_exchange
-      RabbitMq__RoutingKey: ""
+      Messaging__ServiceName: webapp
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ClientId: arbiscanner-web
       Redis__Endpoint: redis:6379
       Cors__AllowedOrigins__0: "${WEB_CLIENT_URL}"
       Serilog__WriteTo__1__Name: GrafanaLoki
@@ -299,8 +364,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
+      kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       keycloak:
@@ -315,7 +383,7 @@ services:
   web-client:
     build:
       # Root context: the gateway nginx config lives at ./nginx (repo root, not the
-      # submodule) since it routes to all four submodules plus Grafana/Prometheus/RabbitMQ.
+      # submodule) since it routes to all four submodules plus Grafana/Prometheus.
       context: .
       dockerfile: ArbiScannerWebApp/Dockerfile.client
       args:
@@ -344,7 +412,6 @@ services:
       - admin-client
       - grafana
       - prometheus
-      - rabbitmq
       - keycloak
     networks:
       - arbiscanner
@@ -453,12 +520,9 @@ services:
       - "8085:8085"
     environment:
       ConnectionStrings__PostgreSqlConnection: "Host=postgres;Port=5432;Database=ArbiScannerBot;Username=postgres;Password=su1234"
-      RabbitMq__Host: rabbitmq
-      RabbitMq__Queue: spread_telegram
-      RabbitMq__Username: guest
-      RabbitMq__Password: guest
-      RabbitMq__Exchange: spread_fanout_exchange
-      RabbitMq__RoutingKey: ""
+      Messaging__ServiceName: telegram
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ClientId: arbiscanner-telegram-notifier
       Redis__Endpoint: redis:6379
       Telegram__BotToken: "${TELEGRAM_BOT_TOKEN}"
       Serilog__WriteTo__1__Name: GrafanaLoki
@@ -480,8 +544,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
+      kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       loki:
@@ -504,7 +571,8 @@ services:
       - "8086:8085"
     environment:
       MongoDb_ConnectionString: "mongodb://${MONGODB_USERNAME}:${MONGODB_PASSWORD}@mongodb:27017/ArbitrageScanner?authSource=admin"
-      RABBITMQ_HOST: rabbitmq
+      Kafka__BootstrapServers: kafka:9092
+      Kafka__ClientId: arbiscanner-arbitrage-scanner
       Arbitrage__SpreadSize: "${ARBITRAGE_SPREAD_SIZE}"
       Arbitrage__PositionSize: "${ARBITRAGE_POSITION_SIZE}"
       Arbitrage__KeepWatchingSpread: "${ARBITRAGE_KEEP_WATCHING_SPREAD}"
@@ -534,8 +602,11 @@ services:
       timeout: 5s
       retries: 5
     depends_on:
-      rabbitmq:
+      # Kafka is the live event path: wait for the broker and for the topics to exist.
+      kafka:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       mongodb:
         condition: service_healthy
       loki:
@@ -650,7 +721,7 @@ services:
 
 volumes:
   postgres-data:
-  rabbitmq-data:
+  kafka-data:
   mongodb-data:
   loki-data:
   grafana-data:

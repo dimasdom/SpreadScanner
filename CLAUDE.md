@@ -8,7 +8,7 @@ This is the **monorepo root** for ArbiScanner, a cryptocurrency arbitrage scanni
 
 | Submodule directory | Purpose | Runtime |
 |---|---|---|
-| `ArbitrageScanner` | Core scanning engine — scans 12+ exchanges via ccxt, detects spreads, publishes to RabbitMQ | .NET 10 Worker |
+| `ArbitrageScanner` | Core scanning engine — scans 12+ exchanges via ccxt, detects spreads, publishes to Kafka | .NET 10 Worker |
 | `ArbiScannerWebApp` | User-facing API + React SPA — consumes spreads, serves them via REST/SignalR | .NET 10 + React 19 |
 | `ArbiScannerAdminPannel` | Admin/manager API + React SPA — users, subscriptions, OxaPay payments | .NET 10 + React 19 |
 | `ArbiScanner.TelegramNotifierApp` | Telegram bot + notification worker | .NET 10 Worker |
@@ -33,9 +33,9 @@ This means the Docker build context for `ArbiScannerAdminPannel`'s API and for `
 
 ```
 ArbitrageScanner (ccxt, 12+ exchanges)
-   -> protobuf TradeOpportunityModel -> RabbitMQ "spread_fanout_exchange" (fanout)
-        -> queue "spread_api"      -> ArbiScannerWebApp (Postgres + Mongo + SignalR push to React SPA)
-        -> queue "spread_telegram" -> TelegramNotifierApp (filters per-user criteria, sends via Telegram Bot API)
+   -> protobuf TradeOpportunityModel -> Kafka topic "spreads" (key = spread identity: {type}:{exLo}:{exHi}:{pair})
+        -> group "webapp-spreads"   -> ArbiScannerWebApp (Postgres + Mongo + SignalR push to React SPA)
+        -> group "telegram-spreads" -> TelegramNotifierApp (filters per-user criteria, sends via Telegram Bot API)
 
 ArbiScannerAdminPannel: separate API/SPA, talks to ArbiScannerWebApp's Postgres DB (read) + its own admin-only Postgres DB (owned), OxaPay for payments.
 
@@ -43,11 +43,17 @@ ArbiScanner.McpServer: pure resource server, forwards the caller's own bearer to
 ArbiScanner.AiAssistant: SignalR chat backend for ArbiScannerWeb.Client; on a spread-data question it calls ArbiScanner.McpServer's tools (exchanging the caller's own token first), otherwise answers from a built-in knowledge base or OpenRouter directly.
 ```
 
+- **Messaging is Kafka only** (decision: `docs/arc42/adr/0007-kafka-event-backbone.md`; plan and operations: `docs/architecture/kafka-migration-plan.md`, `kafka-operations.md`). Things that are easy to get wrong:
+  - Topic `spreads` (+ `spreads.dlq`) is created by the `kafka-init` job; broker auto-creation is off. Partition counts are never altered automatically — adding partitions remaps keys and breaks per-spread ordering.
+  - The message key (`{type}:{exLo}:{exHi}:{pair}`, built by `SpreadKey` / `SpreadEventKeys`) is the spread's stable identity. Never put changing state (long/short direction) in it. The helper exists twice — `ArbitrageScanner.Infrastructure/Messaging/Kafka` and `ArbiScannerWeb.Infrastructure/Messaging` — kept identical by `spread-key-vectors.json` in both test projects; change both together or not at all.
+  - Consumers commit offsets after processing and dedupe by `message-id` (`spread-dedupe:{service}:{message-id}` in Redis). `Messaging__ServiceName` derives the consumer group and is required; `Kafka__Consumer__Enabled=false` turns a consumer off for hosts without a broker.
+  - `ArbiScannerWeb.Messaging.Kafka` is its own project on purpose: `ArbiScannerAdminPannel` references `ArbiScannerWeb.Infrastructure`, so Kafka code must not live there. The Telegram worker references the same project and its Docker build must copy it (see its Dockerfile).
+  - The web API must stay a single replica (SignalR has no backplane).
 - **Three Postgres databases**: `ArbiScannerBot` (shared — owned/migrated by `ArbiScannerWebApp`; users, Telegram links, accounts), `ArbiScannerAdminPanelDb` (owned/migrated by `ArbiScannerAdminPannel`; admin users, subscriptions, payments), and `keycloak` (owned by Keycloak itself — created once by hand, see [Authentication](#authentication--self-hosted-keycloak-oidc)). Never create EF migrations for `AppDbContext` from the AdminPanel project, and never create migrations for `AdminPanelAppDbContext` from the WebApp project.
 - **MongoDB** is used by both `ArbitrageScanner` (found-spreads only) and `ArbiScannerWebApp` (spreads + historical ticker data) — separate databases/collections, not shared.
 - All six services (the four original ones plus `ArbiScanner.McpServer`/`ArbiScanner.AiAssistant`) export OpenTelemetry traces via OTLP gRPC to Grafana Tempo, and expose Prometheus metrics (`/metrics` on the web APIs, a standalone listener on port 8085 for worker services). Logs go through Serilog to Grafana Loki. If you touch tracing/logging config in one service, check whether the same pattern needs mirroring in the others — it's duplicated per-submodule, not shared.
 - `ArbitrageScanner`'s worker no longer force-restarts every 4 hours — that `timeout 14400` wrapper was removed after a leak investigation (`docs/completed-work-summary.md`, "Phase C") fixed a concrete `ProxyService` issue (a new `HttpClient` was created on every proxy rotation instead of being reused), though the investigation didn't conclusively prove that was the original cause of the degradation. If you see unbounded memory/handle growth over a multi-hour run, that doc's negative-result section is the place to continue from — don't just reintroduce the restart hack as a shortcut.
-- `ArbitrageScanner` supports horizontal sharding via `NODE_TOTAL`/`NODE_INDEX` env vars, partitioning the symbol universe by index modulo — all nodes still write to the same Mongo/RabbitMQ.
+- `ArbitrageScanner` supports horizontal sharding via `NODE_TOTAL`/`NODE_INDEX` env vars, partitioning the symbol universe by index modulo — all nodes still write to the same Mongo and publish to the same Kafka topic.
 
 ## Authentication — self-hosted Keycloak (OIDC)
 
@@ -64,7 +70,7 @@ One-time setup (Keycloak's own Postgres db, DNS/TLS, SMTP, staff accounts, and �
 
 For local dev, `docker-compose.local.yml` is an **opt-in** override (not auto-loaded — the root `docker-compose.yml` doubles as the real production deploy command, so an auto-merged override would silently change prod behavior):
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres kafka kafka-init redis mongodb keycloak
 ./keycloak/configure-local-dev.sh   # patches fixed local-dev client secrets, arbiscanner-mcp token exchange
 ```
 It exposes Keycloak on a plain-HTTP host port (`localhost:8082`) and points `mcp-server`/`ai-assistant` at it plus a locally-`dotnet run` `ArbiScannerWeb.API`. See root-level [`MCP_TESTING.md`](MCP_TESTING.md) and [`AI_ASSISTANT_TESTING.md`](AI_ASSISTANT_TESTING.md) for full local walkthroughs of those two services end to end.
@@ -85,7 +91,7 @@ dotnet run
 dotnet test <Submodule>.sln             # runs all test projects (xunit + FluentAssertions + Moq)
 dotnet test path/to/One.Tests.csproj --filter "FullyQualifiedName~ClassName.MethodName"   # single test
 ```
-`*.IntegrationTests` in `ArbiScannerWebApp`, `ArbiScannerAdminPannel`, and `ArbitrageScanner` use **Testcontainers** — real Postgres/RabbitMQ/Mongo containers, so Docker must be running locally and these tests are slower. `ArbiScanner.McpServer`'s and `ArbiScanner.AiAssistant`'s `*.IntegrationTests` are Docker-free by contrast — `WebApplicationFactory` against the real app with only the downstream HTTP call stubbed, no Testcontainers needed. `ArbiScannerWeb.LoadTests` and `ArbiScannerAdminPanel.LoadTests` are separate load-testing projects, not part of the normal test run.
+`*.IntegrationTests` in `ArbiScannerWebApp`, `ArbiScannerAdminPannel`, and `ArbitrageScanner` use **Testcontainers** — real Postgres/Kafka/Mongo/Redis containers, so Docker must be running locally and these tests are slower. `ArbiScanner.McpServer`'s and `ArbiScanner.AiAssistant`'s `*.IntegrationTests` are Docker-free by contrast — `WebApplicationFactory` against the real app with only the downstream HTTP call stubbed, no Testcontainers needed. `ArbiScannerWeb.LoadTests` and `ArbiScannerAdminPanel.LoadTests` are separate load-testing projects, not part of the normal test run.
 
 ### React clients (`ArbiScannerWeb.Client`, `ArbiScannerAdminPanel.Client`)
 ```bash
@@ -115,10 +121,10 @@ Keycloak's `keycloak` database is managed by Keycloak itself — never migrated 
 docker compose up --build
 
 # Infra only (fast path for local .NET/npm dev)
-docker compose up postgres rabbitmq redis mongodb -d
+docker compose up postgres kafka kafka-init redis mongodb -d
 
 # Infra + local Keycloak, opt-in override (see Authentication above)
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres rabbitmq redis mongodb keycloak
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d postgres kafka kafka-init redis mongodb keycloak
 ```
 Submodules also ship their own standalone `docker-compose.yml` for developing one service in isolation — but remember the AdminPanel API and TelegramNotifierApp images need repo-root build context (see above), so building via `docker compose up` from inside those submodule directories alone won't work for the API image; use the compose file at the monorepo root or pass an explicit `-f`/context.
 
@@ -132,7 +138,7 @@ Domain  <-  Abstractions  <-  Infrastructure  <-  (Application  <-)  API / Worke
 
 - `Domain`: POCOs, enums, DTOs — zero external package deps.
 - `Abstractions`: interfaces only; all service interfaces return `FluentResults`' `Result`/`Result<T>` rather than throwing, so error handling stays explicit across layer boundaries — follow this convention for new services rather than introducing exceptions-as-control-flow.
-- `Infrastructure`: EF Core/Mongo/Redis/RabbitMQ/HTTP implementations of the Abstractions interfaces.
+- `Infrastructure`: EF Core/Mongo/Redis/Kafka/HTTP implementations of the Abstractions interfaces.
 - `Application` (WebApp, AdminPanel, TelegramNotifierApp, AiAssistant — `ArbitrageScanner` and `ArbiScanner.McpServer` skip this layer, since both are thin pass-throughs with no use-case orchestration to speak of): business logic/use-case orchestration.
 - `API`/`Worker`/`Host`: composition root (DI wiring in `Program.cs` / `StartupSetup.cs`), controllers, hosted services, or MCP tool/hub endpoints.
 

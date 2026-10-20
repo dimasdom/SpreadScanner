@@ -36,11 +36,11 @@ graph TB
     end
 
     subgraph broker ["Message Broker"]
-        FANOUT[["RabbitMQ\nFanout Exchange\nspread_fanout_exchange"]]
+        FANOUT[["Kafka\ntopic: spreads\nkey = spread identity"]]
     end
 
     subgraph webapp ["ArbiScannerWebApp  ·  .NET 10"]
-        WEB_CONSUMER["RabbitMQ Consumer\n(queue: spread_api)"]
+        WEB_CONSUMER["Kafka Consumer\n(group: webapp-spreads)"]
         WEB_API["ASP.NET Core 10 API\nJWT · REST · SignalR"]
         WEB_HUB["SignalR Hub"]
     end
@@ -50,7 +50,7 @@ graph TB
     end
 
     subgraph notifier ["TelegramNotifier  ·  .NET 10 Worker"]
-        TG_CONSUMER["RabbitMQ Consumer\n(queue: spread_telegram)"]
+        TG_CONSUMER["Kafka Consumer\n(group: telegram-spreads)"]
         TG_BOT["Telegram Bot\n(account linking · opt-in/out)"]
     end
 
@@ -123,16 +123,18 @@ graph TB
 
 | Docker service       | Port(s)       | Purpose                                           | Technology                              |
 |----------------------|---------------|---------------------------------------------------|-----------------------------------------|
-| `arbitrage-scanner`  | —             | Core arbitrage engine; scans exchanges            | .NET 10, CCXT, RabbitMQ, MongoDB        |
+| `arbitrage-scanner`  | —             | Core arbitrage engine; scans exchanges            | .NET 10, CCXT, Kafka, MongoDB           |
 | `web`                | 8080          | User-facing Web API                               | ASP.NET Core 10, PostgreSQL, Redis, MongoDB, SignalR |
 | `web-client`         | 80            | User-facing React SPA (spread dashboard)          | React, Vite, nginx                      |
 | `admin-api`          | 8081          | Admin Web API (users, subscriptions, payments)    | ASP.NET Core 10, PostgreSQL, Redis      |
 | `admin-client`       | 3002          | Admin React SPA                                   | React, Vite, nginx                      |
-| `telegram-notifier`  | —             | Sends Telegram spread alerts to subscribers       | .NET 10, RabbitMQ, Telegram.Bot SDK     |
+| `telegram-notifier`  | —             | Sends Telegram spread alerts to subscribers       | .NET 10, Kafka, Telegram.Bot SDK        |
 | `mcp-server`         | 8087          | MCP server exposing spread-query tools            | ASP.NET Core 10, ModelContextProtocol SDK |
 | `ai-assistant`       | 8088          | AI chat assistant backend (SignalR ChatHub)       | ASP.NET Core 10, ModelContextProtocol SDK, OpenRouter |
 | `postgres`           | 5432          | Relational database (shared + admin schemas)      | PostgreSQL                              |
-| `rabbitmq`           | 5672 / 15672  | Message broker; management UI on 15672            | RabbitMQ 3 with management plugin       |
+| `kafka`              | — (compose network only) | Event backbone: the `spreads` topic and its dead-letter topic | Apache Kafka 3.9 (KRaft, single node) |
+| `kafka-init`         | —             | One-shot job that creates the topics              | Kafka CLI                               |
+| `kafka-exporter`     | —             | Consumer-lag metrics for Prometheus               | danielqsj/kafka-exporter                |
 | `redis`              | 6379          | Cache and distributed state                       | Redis                                   |
 | `mongodb`            | 27017         | Ticker and spread document store                  | MongoDB                                 |
 | `loki`               | 3100          | Log aggregation                                   | Grafana Loki                            |
@@ -263,12 +265,12 @@ docker compose up --build -d
 | http://localhost:8080        | User Web API                   |
 | http://localhost:3002        | Admin panel (React SPA)        |
 | http://localhost:8081        | Admin Web API                  |
-| http://localhost:15672       | RabbitMQ management UI         |
+| http://localhost:8088        | Kafka UI (optional: `docker compose --profile tools up -d kafka-ui`) |
 | http://localhost:3000        | Grafana dashboards             |
 | http://localhost:9090        | Prometheus metrics UI          |
 | http://localhost:3200        | Grafana Tempo query API        |
 
-Default RabbitMQ credentials: `guest / guest`. Set Grafana credentials via `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`.
+Kafka has no published port and no credentials; it is reachable only on the compose network (the local override adds `localhost:29092` — see `docs/architecture/kafka-operations.md`). Set Grafana credentials via `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`.
 
 ### 5. Stop services
 
@@ -453,7 +455,7 @@ Each submodule also ships its own `.sln` / `.slnx` and `docker-compose.yml` for 
 The fastest way to get the dependent services running locally is to start only the infrastructure stack from the root compose file:
 
 ```bash
-docker compose up postgres rabbitmq redis mongodb -d
+docker compose up postgres kafka kafka-init redis mongodb -d
 ```
 
 ### ArbiScannerWebApp (ASP.NET Core 10 API + React/Vite)
@@ -497,7 +499,7 @@ cd ArbiScanner.TelegramNotifierApp/ArbiScanner.TelegramNotifierApp.Worker
 dotnet run
 ```
 
-Ensure `TELEGRAM_BOT_TOKEN` and RabbitMQ / PostgreSQL connection strings are set in `appsettings.Development.json` or as environment variables.
+Ensure `TELEGRAM_BOT_TOKEN`, `Kafka__BootstrapServers`, `Messaging__ServiceName` and the PostgreSQL connection string are set in `appsettings.Development.json` or as environment variables.
 
 ### ArbiScanner.McpServer (.NET 10 ASP.NET Core MCP host)
 
@@ -532,7 +534,7 @@ cd ArbitrageScanner/ArbitrageScanner.Worker
 dotnet run
 ```
 
-Requires .NET 10 SDK. Set `MongoDb_ConnectionString` and `RABBITMQ_HOST` in environment or `appsettings.Development.json`. The scanning mode (futures / funding / spot) is controlled via the `Arbitrage__*` environment variables.
+Requires .NET 10 SDK. Set `MongoDb_ConnectionString` and `Kafka__BootstrapServers` in environment or `appsettings.Development.json`. The scanning mode (futures / funding / spot) is controlled via the `Arbitrage__*` environment variables.
 
 > **Note:** the scanner no longer force-restarts every 4 hours. That `timeout 14400` wrapper was removed after a leak investigation (`docs/investigations/scanner-memory-leak.md`) — see `docs/completed-work-summary.md` for the full write-up, including why the result was inconclusive on root cause even though the wrapper was removed anyway.
 
@@ -633,7 +635,9 @@ No separate GHCR secret is needed — pushing just requires "Read and write perm
 
 | Doc | What it's for |
 |---|---|
-| `docs/roadmap.md` | Fix plan for confirmed gaps (RabbitMQ resilience, OxaPay webhook verification, dev hygiene/CI, scanner leak investigation) |
+| `docs/roadmap.md` | Fix plan for confirmed gaps (message-pipeline resilience, OxaPay webhook verification, dev hygiene/CI, scanner leak investigation) |
+| `docs/architecture/kafka-migration-plan.md` | The RabbitMQ → Kafka migration: findings, design, what each phase changed (the decision itself is ADR-0007 in `docs/arc42/adr/`) |
+| `docs/architecture/kafka-operations.md` | Running Kafka here: topics, partition sizing, replication, replay, consumer groups, alerts |
 | `docs/completed-work-summary.md` | What was actually done against that plan, and why — the narrative version, for explaining the work to someone else |
 | `docs/investigations/scanner-memory-leak.md` | The scanner leak investigation write-up: methodology, evidence, and an honest negative result on root cause |
 | `docs/adr/` | Architecture decision records (planned, not yet written) |

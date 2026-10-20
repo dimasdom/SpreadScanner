@@ -1,0 +1,64 @@
+# Kafka alerts. Metrics come from kafka-exporter (job "kafka").
+# There is no Alertmanager yet: firing alerts are visible at /prometheus/alerts and in
+# Grafana's "Kafka" dashboard. Wire Alertmanager (or Grafana alerting) when notifications are needed.
+groups:
+  - name: kafka
+    rules:
+      - alert: KafkaExporterDown
+        expr: up{job="kafka"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kafka-exporter is not scraped"
+          description: "Prometheus cannot reach kafka-exporter (or the exporter cannot reach the broker) for 2 minutes."
+
+      - alert: KafkaBrokerDown
+        expr: kafka_brokers < 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Kafka broker is reachable"
+
+      # Lag that is both non-trivial and still increasing: a consumer that is falling behind or stuck.
+      # A burst that drains again does not fire because the derivative turns negative.
+      - alert: KafkaConsumerLagGrowing
+        expr: |
+          sum by (consumergroup, topic) (kafka_consumergroup_lag) > 100
+          and
+          deriv(sum by (consumergroup, topic) (kafka_consumergroup_lag)[10m:1m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer group {{ $labels.consumergroup }} is falling behind on {{ $labels.topic }}"
+          description: "Lag is above 100 messages and has kept growing for 10 minutes (current: {{ $value }})."
+
+      - alert: KafkaConsumerGroupHasNoMembers
+        expr: kafka_consumergroup_members == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer group {{ $labels.consumergroup }} has no active members"
+
+      # Anything on a dead-letter topic needs a human: a poison message was parked after retries.
+      - alert: KafkaDeadLetterMessages
+        expr: sum by (topic) (increase(kafka_topic_partition_current_offset{topic=~".+\\.dlq"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Messages were dead-lettered to {{ $labels.topic }}"
+          description: "{{ $value }} message(s) were parked in the last 15 minutes. Inspect the dlq-error headers (Kafka UI) and replay or discard."
+
+  # Publish side (exported by the scanner, not by kafka-exporter).
+  - name: kafka-publish
+    rules:
+      - alert: KafkaPublishFailing
+        expr: sum(increase(arbiscanner_messaging_publish_kafka_failures_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The scanner failed to publish {{ $value }} event(s) to Kafka in the last 10 minutes"
+          description: "Each failure also threw into the observer that raised it. Check the broker and the scanner logs ('Kafka produce failed')."

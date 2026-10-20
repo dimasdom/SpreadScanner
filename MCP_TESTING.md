@@ -2,10 +2,10 @@
 
 Local notes for exercising the MCP server end to end (token generation → MCP
 tool calls → data from `ArbiScannerWeb.API`) against your local Docker stack.
-Assumes you already have Postgres/RabbitMQ/Redis/MongoDB/Keycloak running per
+Assumes you already have Postgres/Kafka/Redis/MongoDB/Keycloak running per
 the root `README.md`'s "Local Development" section
 (`docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
-postgres rabbitmq redis mongodb keycloak`).
+postgres kafka kafka-init redis mongodb keycloak`).
 
 ---
 

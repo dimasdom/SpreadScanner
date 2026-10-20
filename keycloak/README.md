@@ -241,7 +241,7 @@ is what makes `AddAuthenticationJwt`'s `RequireHttpsMetadata =
    with plain `docker compose up`):
    ```bash
    docker compose -f docker-compose.yml -f docker-compose.local.yml \
-     up -d postgres rabbitmq redis mongodb keycloak
+     up -d postgres kafka kafka-init redis mongodb keycloak
    ```
 2. **Create the `keycloak` database** (one-time, per step 1 above) and the
    `ArbiScannerAdminPanelDb` database `dotnet ef database update` expects:
